@@ -20,6 +20,7 @@ import asyncio
 import io
 import logging
 import os
+import struct
 import wave
 from typing import AsyncIterator, Awaitable, Callable
 
@@ -42,6 +43,8 @@ except ImportError:
 
 REALTIME_MODEL = "voxtral-mini-transcribe-realtime-2602"
 BATCH_MODEL = "voxtral-mini-latest"
+TTS_MODEL = "voxtral-mini-tts-2603"
+TTS_SAMPLE_RATE = 24000  # native output rate of the TTS API (pcm)
 SAMPLE_RATE = 16000
 LANGUAGE = "fr"
 
@@ -54,6 +57,57 @@ CUSTOM_VOCABULARY = [
 ]
 
 OnText = Callable[[str, str], Awaitable[None]]
+OnAudio = Callable[[bytes], Awaitable[None]]
+
+
+def _extract_tts_audio(response) -> bytes:
+    """Extract raw audio bytes from a TTS response, across SDK versions."""
+    for attr in ("audio", "audio_data", "data", "content"):
+        value = getattr(response, attr, None)
+        if not value:
+            continue
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, str):
+            import base64
+            try:
+                return base64.b64decode(value)
+            except Exception:
+                return value.encode()
+    return b""
+
+
+def _resample_pcm_s16le(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
+    """Linearly resample 16-bit mono PCM between rates (stdlib only)."""
+    if not pcm or src_rate == dst_rate:
+        return pcm
+    samples = struct.unpack(f"<{len(pcm) // 2}h", pcm[: len(pcm) // 2 * 2])
+    n_src = len(samples)
+    if n_src == 0:
+        return b""
+    n_dst = int(n_src * dst_rate / src_rate)
+    out = bytearray()
+    for i in range(n_dst):
+        pos = i * (n_src - 1) / max(n_dst - 1, 1)
+        i0 = int(pos)
+        i1 = min(i0 + 1, n_src - 1)
+        frac = pos - i0
+        out += int(samples[i0] * (1 - frac) + samples[i1] * frac).to_bytes(2, "little", signed=True)
+    return bytes(out)
+
+
+def processText(realtime_text: str, batch_text: str) -> str:
+    """Hook called with both transcriptions of a finished phrase.
+
+    Receives the realtime transcription and the batch transcription
+    (biased with the custom vocabulary) and returns the text to speak and
+    display. Customize this function to plug in an LLM, a translator, a
+    command interpreter, etc. Return an empty string to say nothing.
+
+    Default: prefer the batch transcription, falling back to the realtime
+    one when the batch pass failed.
+    """
+    return batch_text or realtime_text
 
 
 def pipeline_available() -> bool:
@@ -70,11 +124,12 @@ class SpeechPipeline:
     (better) batch text is delivered via on_text().
     """
 
-    def __init__(self, on_text: OnText):
+    def __init__(self, on_text: OnText, on_audio: OnAudio):
         api_key = os.environ["MISTRAL_API_KEY"]
         self.client = Mistral(api_key=api_key)
         self.audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=SAMPLE_RATE)
         self.on_text = on_text
+        self.on_audio = on_audio
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.audio = io.BytesIO()
         self.phrase = ""
@@ -133,10 +188,20 @@ class SpeechPipeline:
             log.info("phrase (realtime pass): %s", full_phrase)
 
             batch_text = await self._transcribe_batch(wav_data)
-            final_text = batch_text or full_phrase
             if batch_text:
                 log.info("phrase (batch pass, custom vocabulary): %s", batch_text)
-            await self.on_text(final_text, "transcription")
+
+            # User hook: decide what to speak/display from both transcriptions
+            spoken_text = processText(full_phrase, batch_text)
+            if not spoken_text:
+                return
+            log.info("processText output: %s", spoken_text)
+            await self.on_text(spoken_text, "transcription")
+
+            # Text-to-speech: convert the processText() output to audio
+            pcm = await self._synthesize_speech(spoken_text)
+            if pcm:
+                await self.on_audio(pcm)
         else:
             self.phrase += str(text)
 
@@ -152,6 +217,30 @@ class SpeechPipeline:
             wav_file.setframerate(SAMPLE_RATE)
             wav_file.writeframes(pcm)
         return buf.getvalue()
+
+    async def _synthesize_speech(self, text: str) -> bytes:
+        """Convert text to speech via /v1/audio/speech and return PCM blocks.
+
+        Returns 16-bit mono PCM resampled to the client headset rate
+        (SAMPLE_RATE), or b"" on failure (nothing is sent to the headset).
+        """
+        try:
+            def call() -> bytes:
+                response = self.client.audio.speech.complete(
+                    model=TTS_MODEL,
+                    input=text,
+                    response_format="pcm",
+                )
+                return _extract_tts_audio(response)
+
+            raw = await asyncio.to_thread(call)
+        except Exception as exc:
+            log.error("text-to-speech failed: %s", exc)
+            return b""
+
+        return _resample_pcm_s16le(
+            raw, TTS_SAMPLE_RATE, SAMPLE_RATE
+        ) if raw else b""
 
     async def _transcribe_batch(self, wav_data: bytes) -> str:
         """Second pass: batch transcription biased with the custom vocabulary."""

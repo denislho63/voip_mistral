@@ -173,8 +173,11 @@ async def start_pipeline(connection: ServerConnection) -> None:
     async def on_text(text: str, tag: str) -> None:
         await sendTextBlock(connection, text)
 
+    async def on_audio(pcm: bytes) -> None:
+        await sendAudioBlock(connection, pcm)
+
     try:
-        PIPELINES[connection] = SpeechPipeline(on_text)
+        PIPELINES[connection] = SpeechPipeline(on_text, on_audio)
         log.info("speech pipeline started for %s", connection.remote_address)
     except Exception as exc:
         log.error("failed to start speech pipeline: %s", exc)

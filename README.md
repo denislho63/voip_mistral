@@ -48,6 +48,22 @@ the app; audio blocks are dropped and a warning is logged.
 The custom vocabulary lives in `speech_pipeline.py` (`CUSTOM_VOCABULARY`).
 API keys must come from the environment — never hard-code them.
 
+### processText() hook and text-to-speech
+
+`processText(realtime_text, batch_text)` (in `speech_pipeline.py`) receives
+**both transcriptions** of each finished phrase and returns the text to send
+back. That text is:
+
+1. sent to the phone as text via `sendTextBlock()` (displayed, copyable),
+2. converted to speech via the `https://api.mistral.ai/v1/audio/speech`
+   endpoint (`voxtral-mini-tts-2603`, `response_format="pcm"`) and sent as
+   audio to the headset via `sendAudioBlock()` (resampled from 24 kHz to
+   the headset's 16 kHz).
+
+Default implementation: prefer the batch transcription, fall back to the
+realtime one; return an empty string to say nothing. Customize it to plug in
+an LLM, a translator, a command interpreter, etc.
+
 ## Protocol
 
 | Frame | Payload |
