@@ -6,7 +6,7 @@ setlocal
 cd /d "%~dp0"
 if not exist certs mkdir certs
 
-openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes ^
+"C:\Program Files\OpenSSL-Win64\bin\openssl" req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes ^
   -keyout certs\key.pem -out certs\cert.pem ^
   -subj "/CN=phone-stream.local" ^
   -addext "subjectAltName=DNS:phone-stream.local,DNS:localhost,IP:127.0.0.1"
