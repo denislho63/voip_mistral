@@ -36,10 +36,22 @@ is already working.
 
 ## Run
 
+Linux / macOS:
+
 ```bash
 bash run.sh            # generates self-signed certs on first run, serves on :8443
 bash run.sh 9443       # custom port
 ```
+
+Windows (cmd or double-click):
+
+```bat
+run.bat               :: generates self-signed certs on first run, serves on :8443
+run.bat 9443          :: custom port
+```
+
+On Windows, `openssl` must be in `PATH` (Git for Windows bundles one:
+`C:\Program Files\Git\usr\bin\openssl.exe`).
 
 Requirements: Python 3.10+, `websockets` (`pip install -r requirements.txt`).
 
