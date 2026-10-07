@@ -114,7 +114,7 @@
   let speakerOn = false;            // user intent
   let locked = false;               // phone lock / page hidden
   let sendingPaused = false;        // locked && (micActive || speakerOn)
-  let recorder = null;              // MediaRecorder
+  let micProcessor = null;         // ScriptProcessorNode for PCM capture
   let stream = null;                // getUserMedia stream
   let outQueue = [];                // binary blocks awaiting ws drain
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -146,9 +146,7 @@
     banner.classList.toggle("show", locked && (micActive || speakerOn));
     if (locked) {
       // stop all outbound streaming; received text is kept (DOM persists)
-      if (recorder && recorder.state === "recording") {
-        try { recorder.stop(); } catch (e) {}
-      }
+      if (micProcessor) { try { micProcessor.disconnect(); } catch (e) {} micProcessor = null; }
     } else if (micActive) {
       startMic(); // resume
     }
@@ -171,7 +169,7 @@
     ws.onclose = () => {
       if (mySession !== session) return; // stale
       setStatus(false, "disconnected");
-      if (recorder && recorder.state === "recording") recorder.stop();
+      stopMic();
       setTimeout(connect, 2000); // auto-reconnect, keeps app running "all time"
     };
     ws.onerror = () => setStatus(false, "error", "warn");
@@ -226,34 +224,66 @@
   }
 
   // ---- audio in (microphone) --------------------------------------------
+  // The server's realtime transcription API expects raw 16-bit PCM mono at
+  // 16 kHz. MediaRecorder only produces compressed containers (webm/opus),
+  // so we capture with a ScriptProcessorNode, downmix to mono, resample to
+  // pcm.sampleRate and send raw PCM blocks every ~250 ms.
   async function startMic() {
-    if (recorder && recorder.state === "recording") return;
+    if (micProcessor) return;
     if (!stream) {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount: pcm.channels, sampleRate: pcm.sampleRate },
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (e) {
         setStatus(true, "mic denied", "warn");
         return;
       }
     }
-    // Server expects raw PCM. MediaRecorder gives webm/opus; we instead
-    // use ScriptProcessor-free path: AudioWorklet is ideal, but for
-    // simplicity we use MediaRecorder with audio/webm and let the server
-    // stub process it. Blocks are time-sliced.
-    recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
-    let last = 0;
-    recorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0 && ws && ws.readyState === 1 && !locked) {
-        ev.data.arrayBuffer().then((ab) => ws.send(ab));
+
+    const source = audioCtx.createMediaStreamSource(stream);
+    const blockSamples = Math.floor(pcm.sampleRate * 250 / 1000); // 250 ms
+    micProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+    let acc = new Float32Array(0);
+    micProcessor.onaudioprocess = (ev) => {
+      const input = ev.inputBuffer.getChannelData(0); // mono capture
+      const ratio = audioCtx.sampleRate / pcm.sampleRate;
+      const nOut = Math.max(1, Math.floor(input.length / ratio));
+      const res = new Float32Array(nOut);
+      for (let i = 0; i < nOut; i++) {
+        const pos = i * ratio;
+        const i0 = Math.floor(pos);
+        const frac = pos - i0;
+        const i1 = Math.min(i0 + 1, input.length - 1);
+        res[i] = input[i0] * (1 - frac) + input[i1] * frac;
+      }
+      const merged = new Float32Array(acc.length + res.length);
+      merged.set(acc); merged.set(res, acc.length);
+      acc = merged;
+
+      while (acc.length >= blockSamples) {
+        const block = acc.subarray(0, blockSamples);
+        const buf = new DataView(new ArrayBuffer(blockSamples * 2));
+        for (let i = 0; i < blockSamples; i++) {
+          const s = Math.max(-1, Math.min(1, block[i]));
+          buf.setInt16(i * 2, s < 0 ? s * 32768 : s * 32767, true);
+        }
+        if (ws && ws.readyState === 1 && !locked) ws.send(buf.buffer);
+        acc = acc.subarray(blockSamples);
       }
     };
-    recorder.start(250); // 250 ms blocks
+    source.connect(micProcessor);
+    micProcessor.connect(audioCtx.destination); // needed to drive the node
   }
 
   function stopMic() {
-    if (recorder && recorder.state !== "inactive") recorder.stop();
+    if (micProcessor) {
+      try { micProcessor.disconnect(); } catch (e) {}
+      micProcessor = null;
+    }
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
   }
 
   micBtn.addEventListener("click", () => {
