@@ -9,21 +9,44 @@ A phone-like web application served by a Python secure-WebSocket (wss) server.
 - The app is meant to run all the time. When the phone is locked (page
   hidden), the client stops sending data but keeps the text already received.
 
-## The four functions (defined, not implemented)
+## The four functions (implemented)
 
-In `server.py` these are declared as required but are stubs raising
-`NotImplementedError`. All plumbing (TLS, static serving, connection
-handling, frame routing) is complete and calls into them:
+In `server.py` these are now implemented and wired into the frame routing
+(they were initially declared as required-but-unimplemented stubs):
 
-| Function | Direction | Called by |
+| Function | Direction | Behavior |
 |---|---|---|
-| `processReceivedAudioBlock()` | client → server (binary mic audio) | the framework, for every binary frame |
-| `sendAudioBlock()` | server → client (headset audio) | your media logic |
-| `processReceivedTextBlock()` | client → server (text) | the framework, for every text frame |
-| `sendTextBlock()` | server → client (display/copy) | your logic |
+| `processReceivedAudioBlock()` | client → server (binary mic audio) | feeds PCM into the realtime speech-to-text pipeline (`speech_pipeline.py`) |
+| `sendAudioBlock()` | server → client (headset audio) | sends one binary block, tolerant to closed connections |
+| `processReceivedTextBlock()` | client → server (text) | echoes text back to the client |
+| `sendTextBlock()` | server → client (display/copy) | sends JSON text frame for display/clipboard |
 
-Implement them to plug in real media/text processing; the surrounding server
-is already working.
+### Speech-to-text pipeline (double transcription, custom vocabulary)
+
+`speech_pipeline.py` bridges the phone's microphone to the Mistral APIs:
+
+1. **Realtime pass**: PCM blocks stream into
+   `client.audio.realtime.transcribe_stream`
+   (`voxtral-mini-transcribe-realtime-2602`), producing text deltas.
+2. **Batch pass with custom vocabulary**: when a phrase ends (`.`, `!`, `?`),
+   the phrase audio is re-transcribed in batch via
+   `client.audio.transcriptions.complete` (`voxtral-mini-latest`) with
+   `context_bias=CUSTOM_VOCABULARY` for better accuracy on domain terms.
+   The batch result (falling back to the realtime text on failure) is sent
+   to the phone via `sendTextBlock()` and is visible/copyable in the app.
+
+Enable it with:
+
+```bash
+pip install mistralai
+export MISTRAL_API_KEY=...        # Windows: set MISTRAL_API_KEY=...
+```
+
+Without `mistralai` or `MISTRAL_API_KEY` the server still runs and serves
+the app; audio blocks are dropped and a warning is logged.
+
+The custom vocabulary lives in `speech_pipeline.py` (`CUSTOM_VOCABULARY`).
+API keys must come from the environment — never hard-code them.
 
 ## Protocol
 
@@ -53,7 +76,9 @@ run.bat 9443          :: custom port
 On Windows, `openssl` must be in `PATH` (Git for Windows bundles one:
 `C:\Program Files\Git\usr\bin\openssl.exe`).
 
-Requirements: Python 3.10+, `websockets` (`pip install -r requirements.txt`).
+Requirements: Python 3.10+, `websockets` (`pip install -r requirements.txt`);
+for speech-to-text also `mistralai` (`pip install mistralai`) plus the
+`MISTRAL_API_KEY` environment variable.
 
 Open `https://<server-ip>:8443/` on the phone. Accept the self-signed
 certificate warning once. Mic capture and audio playback each require a user

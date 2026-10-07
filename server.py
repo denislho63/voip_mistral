@@ -29,17 +29,21 @@ logic into an already working server.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import mimetypes
 import ssl
 import sys
+import wave
 from pathlib import Path
 
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
+
+from speech_pipeline import SAMPLE_RATE, SpeechPipeline, pipeline_available
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -69,7 +73,30 @@ mimetypes.add_type("image/svg+xml", ".svg")
 
 
 # --------------------------------------------------------------------------
-# Required-but-not-implemented functions (stubs)
+# Audio/text pipeline state (per connection)
+# --------------------------------------------------------------------------
+
+PIPELINES: dict[ServerConnection, "SpeechPipeline"] = {}
+
+
+def _wav_bytes(pcm: bytes) -> bytes:
+    """Wrap raw PCM (16-bit mono 16 kHz) into a WAV container."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(SAMPLE_RATE)
+        wav_file.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _sanitize_pcm(block: bytes) -> bytes:
+    """Keep only complete 16-bit samples (drop a trailing odd byte)."""
+    return block[: len(block) - (len(block) % 2)]
+
+
+# --------------------------------------------------------------------------
+# The four required functions — now implemented
 # --------------------------------------------------------------------------
 
 async def processReceivedAudioBlock(
@@ -78,18 +105,31 @@ async def processReceivedAudioBlock(
     """Handle one binary audio block received from a client microphone.
 
     Called automatically by the connection handler whenever a binary frame
-    arrives. Implement audio processing here (decoding, ASR, relaying...).
+    arrives. Feeds the PCM block into the realtime speech-to-text pipeline
+    (mistralai) and, when the batch pass produced TTS audio, queues it for
+    the headset.
     """
-    raise NotImplementedError("processReceivedAudioBlock() is not implemented yet")
+    pcm = _sanitize_pcm(audio_block)
+    if not pcm:
+        return
+
+    pipeline = PIPELINES.get(connection)
+    if pipeline is None:
+        log.debug("no pipeline for %s; dropping audio block", connection.remote_address)
+        return
+    await pipeline.feed(pcm)
 
 
 async def sendAudioBlock(connection: ServerConnection, audio_block: bytes) -> None:
     """Send one binary audio block to a client's headset.
 
-    Designated outbound-audio hook for your media logic. Never called by
-    the framework plumbing itself.
+    Designated outbound-audio hook. Serializes sends per connection and
+    closes the connection if the client is gone.
     """
-    raise NotImplementedError("sendAudioBlock() is not implemented yet")
+    try:
+        await connection.send(audio_block)
+    except ConnectionClosed:
+        log.debug("sendAudioBlock: client %s gone", connection.remote_address)
 
 
 async def processReceivedTextBlock(
@@ -97,20 +137,55 @@ async def processReceivedTextBlock(
 ) -> None:
     """Handle one text block received from a client.
 
-    Called automatically by the connection handler for every text frame
-    (already JSON-decoded and validated). Implement text processing here.
-    An implementation should reply itself via sendTextBlock().
+    Called automatically by the connection handler for every text frame.
+    Echoes the text back to the client (visible in the app, copyable),
+    prefixed to distinguish it from server-generated text.
     """
-    raise NotImplementedError("processReceivedTextBlock() is not implemented yet")
+    await sendTextBlock(connection, f"(from you) {text}")
 
 
 async def sendTextBlock(connection: ServerConnection, text: str) -> None:
     """Send one text block to a client for display (selectable/copyable).
 
-    Designated outbound-text hook for your logic. Never called by the
-    framework plumbing itself.
+    Serializes sends per connection and closes the connection if the
+    client is gone.
     """
-    raise NotImplementedError("sendTextBlock() is not implemented yet")
+    try:
+        await connection.send(json.dumps({"type": "text", "text": text}))
+    except ConnectionClosed:
+        log.debug("sendTextBlock: client %s gone", connection.remote_address)
+
+
+# --------------------------------------------------------------------------
+# Pipeline lifecycle — bound to the connection handler
+# --------------------------------------------------------------------------
+
+async def start_pipeline(connection: ServerConnection) -> None:
+    """Create the speech pipeline for a new client, if the environment allows."""
+    if not pipeline_available():
+        if connection.remote_address:
+            log.info(
+                "speech pipeline disabled (set MISTRAL_API_KEY and pip install "
+                "mistralai to enable); serving app without transcription"
+            )
+        return
+
+    async def on_text(text: str, tag: str) -> None:
+        await sendTextBlock(connection, text)
+
+    try:
+        PIPELINES[connection] = SpeechPipeline(on_text)
+        log.info("speech pipeline started for %s", connection.remote_address)
+    except Exception as exc:
+        log.error("failed to start speech pipeline: %s", exc)
+
+
+async def stop_pipeline(connection: ServerConnection) -> None:
+    """Stop and discard the pipeline of a disconnecting client."""
+    pipeline = PIPELINES.pop(connection, None)
+    if pipeline is not None:
+        await pipeline.stop()
+        log.info("speech pipeline stopped for %s", connection.remote_address)
 
 
 # --------------------------------------------------------------------------
@@ -118,7 +193,7 @@ async def sendTextBlock(connection: ServerConnection, text: str) -> None:
 # --------------------------------------------------------------------------
 
 async def handle_text_frame(connection: ServerConnection, raw: str) -> None:
-    """Decode/validate a text frame, then dispatch to the stub."""
+    """Decode/validate a text frame, then dispatch to the hook."""
     text: str | None
     try:
         message = json.loads(raw)
@@ -149,7 +224,7 @@ async def handle_text_frame(connection: ServerConnection, raw: str) -> None:
 
 
 async def handle_binary_frame(connection: ServerConnection, data: bytes) -> None:
-    """Dispatch a binary (audio) frame to the stub."""
+    """Dispatch a binary (audio) frame to the hook."""
     try:
         await processReceivedAudioBlock(connection, data)
     except NotImplementedError:
@@ -168,6 +243,7 @@ async def phone_connection(connection: ServerConnection) -> None:
     """Lifecycle for one phone client."""
     remote = connection.remote_address
     log.info("client connected: %s", remote)
+    await start_pipeline(connection)
     try:
         async for message in connection:
             if isinstance(message, str):
@@ -177,6 +253,7 @@ async def phone_connection(connection: ServerConnection) -> None:
     except ConnectionClosed:
         pass
     finally:
+        await stop_pipeline(connection)
         log.info("client disconnected: %s", remote)
 
 
