@@ -47,7 +47,9 @@ REALTIME_MODEL = "voxtral-mini-transcribe-realtime-2602"
 BATCH_MODEL = "voxtral-mini-latest"
 TTS_MODEL = "voxtral-mini-tts-2603"
 TTS_SAMPLE_RATE = 24000  # native output rate of the TTS API (pcm)
-TTS_VOICE = os.environ.get("MISTRAL_TTS_VOICE", "neutral_female")
+# Voice used for text-to-speech. Override with MISTRAL_TTS_VOICE.
+# Run `python list_voices.py` to see the voice ids available on your account.
+TTS_VOICE = os.environ.get("MISTRAL_TTS_VOICE", "5a271406-039d-46fe-835b-fbbb00eaf08d")
 SAMPLE_RATE = 16000
 LANGUAGE = "fr"
 
