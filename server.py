@@ -38,6 +38,13 @@ import sys
 import wave
 from pathlib import Path
 
+# Windows: the default Proactor event loop raises spurious errors like
+# "Exception in callback _ProactorBasePipeTransport._call_connection_lost"
+# when SSL sockets are closed during shutdown. The Selector loop does not
+# and is fully sufficient for this server (no subprocess support needed).
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
