@@ -48,7 +48,7 @@ the app; audio blocks are dropped and a warning is logged.
 The custom vocabulary lives in `speech_pipeline.py` (`CUSTOM_VOCABULARY`).
 API keys must come from the environment — never hard-code them.
 
-### processText() hook and text-to-speech
+### processText() and process_command() hooks
 
 `processText(realtime_text, batch_text)` (in `process_text.py`) receives
 **both transcriptions** of each finished phrase and returns the text to send
@@ -63,6 +63,11 @@ back. That text is:
 Default implementation: prefer the batch transcription, fall back to the
 realtime one; return an empty string to say nothing. Customize it to plug in
 an LLM, a translator, a command interpreter, etc.
+
+`process_command(text)` (in `process_command.py`) receives the **text typed
+by the user** in the app and returns the response text, which is likewise
+sent as text and converted to speech. Default: echoes the received text
+(the server speaks it back).
 
 ## Protocol
 

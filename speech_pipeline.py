@@ -103,6 +103,26 @@ def pipeline_available() -> bool:
     return MISTRAL_AVAILABLE and bool(os.environ.get("MISTRAL_API_KEY"))
 
 
+def tts_pcm(client, text: str) -> bytes:
+    """Synthesize text to speech (blocking) via /v1/audio/speech.
+
+    Returns 16-bit mono PCM at SAMPLE_RATE (16 kHz), or b"" on failure.
+    """
+    try:
+        response = client.audio.speech.complete(
+            model=TTS_MODEL,
+            input=text,
+            response_format="pcm",
+        )
+        raw = _extract_tts_audio(response)
+    except Exception as exc:
+        log.error("text-to-speech failed: %s", exc)
+        return b""
+    if not raw:
+        return b""
+    return _resample_pcm_s16le(raw, TTS_SAMPLE_RATE, SAMPLE_RATE)
+
+
 class SpeechPipeline:
     """One realtime transcription session per WebSocket client.
 
@@ -127,6 +147,10 @@ class SpeechPipeline:
         """Accept one PCM block (16-bit mono 16 kHz) from the microphone."""
         self.audio.write(pcm)
         await self.queue.put(pcm)
+
+    async def synthesize(self, text: str) -> bytes:
+        """Convert text to headset-ready PCM (non-blocking wrapper)."""
+        return await asyncio.to_thread(tts_pcm, self.client, text)
 
     async def stop(self) -> None:
         """End the session and wait for the background task to finish."""
@@ -187,7 +211,7 @@ class SpeechPipeline:
             await self.on_text(spoken_text, "transcription")
 
             # Text-to-speech: convert the processText() output to audio
-            pcm = await self._synthesize_speech(spoken_text)
+            pcm = await self.synthesize(spoken_text)
             if pcm:
                 await self.on_audio(pcm)
         else:
@@ -205,30 +229,6 @@ class SpeechPipeline:
             wav_file.setframerate(SAMPLE_RATE)
             wav_file.writeframes(pcm)
         return buf.getvalue()
-
-    async def _synthesize_speech(self, text: str) -> bytes:
-        """Convert text to speech via /v1/audio/speech and return PCM blocks.
-
-        Returns 16-bit mono PCM resampled to the client headset rate
-        (SAMPLE_RATE), or b"" on failure (nothing is sent to the headset).
-        """
-        try:
-            def call() -> bytes:
-                response = self.client.audio.speech.complete(
-                    model=TTS_MODEL,
-                    input=text,
-                    response_format="pcm",
-                )
-                return _extract_tts_audio(response)
-
-            raw = await asyncio.to_thread(call)
-        except Exception as exc:
-            log.error("text-to-speech failed: %s", exc)
-            return b""
-
-        return _resample_pcm_s16le(
-            raw, TTS_SAMPLE_RATE, SAMPLE_RATE
-        ) if raw else b""
 
     async def _transcribe_batch(self, wav_data: bytes) -> str:
         """Second pass: batch transcription biased with the custom vocabulary."""

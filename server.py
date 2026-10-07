@@ -50,7 +50,13 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from speech_pipeline import SAMPLE_RATE, SpeechPipeline, pipeline_available
+from process_command import process_command
+from speech_pipeline import (
+    SAMPLE_RATE,
+    SpeechPipeline,
+    pipeline_available,
+    tts_pcm,
+)
 
 # --------------------------------------------------------------------------
 # Configuration
@@ -145,10 +151,19 @@ async def processReceivedTextBlock(
     """Handle one text block received from a client.
 
     Called automatically by the connection handler for every text frame.
-    Echoes the text back to the client (visible in the app, copyable),
-    prefixed to distinguish it from server-generated text.
+    Routes the user's text to the process_command() hook and sends the
+    returned text back to the client (displayed, copyable) plus its
+    text-to-speech rendering to the headset when the pipeline is enabled.
     """
-    await sendTextBlock(connection, f"(from you) {text}")
+    response_text = process_command(text)
+    if response_text:
+        await sendTextBlock(connection, response_text)
+
+    pipeline = PIPELINES.get(connection)
+    if pipeline is not None and response_text:
+        pcm = await pipeline.synthesize(response_text)
+        if pcm:
+            await sendAudioBlock(connection, pcm)
 
 
 async def sendTextBlock(connection: ServerConnection, text: str) -> None:
