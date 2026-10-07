@@ -23,7 +23,7 @@ import numpy as np
 from typing import List, Dict, Optional
 
 # Configuration
-api_key = "4vgYHPfPp5oJ9XG9GWLcnIkdEBpcmj0C"
+api_key = "--------------------------"
 client = Mistral(api_key=api_key)
 audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=16000)
 
