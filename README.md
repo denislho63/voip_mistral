@@ -50,7 +50,7 @@ API keys must come from the environment — never hard-code them.
 
 ### processText() hook and text-to-speech
 
-`processText(realtime_text, batch_text)` (in `speech_pipeline.py`) receives
+`processText(realtime_text, batch_text)` (in `process_text.py`) receives
 **both transcriptions** of each finished phrase and returns the text to send
 back. That text is:
 

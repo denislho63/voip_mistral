@@ -24,6 +24,8 @@ import struct
 import wave
 from typing import AsyncIterator, Awaitable, Callable
 
+from process_text import processText
+
 log = logging.getLogger("phone-stream.speech")
 
 try:
@@ -94,20 +96,6 @@ def _resample_pcm_s16le(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
         frac = pos - i0
         out += int(samples[i0] * (1 - frac) + samples[i1] * frac).to_bytes(2, "little", signed=True)
     return bytes(out)
-
-
-def processText(realtime_text: str, batch_text: str) -> str:
-    """Hook called with both transcriptions of a finished phrase.
-
-    Receives the realtime transcription and the batch transcription
-    (biased with the custom vocabulary) and returns the text to speak and
-    display. Customize this function to plug in an LLM, a translator, a
-    command interpreter, etc. Return an empty string to say nothing.
-
-    Default: prefer the batch transcription, falling back to the realtime
-    one when the batch pass failed.
-    """
-    return batch_text or realtime_text
 
 
 def pipeline_available() -> bool:
