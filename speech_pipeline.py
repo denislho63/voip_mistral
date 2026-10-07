@@ -47,6 +47,7 @@ REALTIME_MODEL = "voxtral-mini-transcribe-realtime-2602"
 BATCH_MODEL = "voxtral-mini-latest"
 TTS_MODEL = "voxtral-mini-tts-2603"
 TTS_SAMPLE_RATE = 24000  # native output rate of the TTS API (pcm)
+TTS_VOICE = os.environ.get("MISTRAL_TTS_VOICE", "neutral_female")
 SAMPLE_RATE = 16000
 LANGUAGE = "fr"
 
@@ -103,6 +104,29 @@ def pipeline_available() -> bool:
     return MISTRAL_AVAILABLE and bool(os.environ.get("MISTRAL_API_KEY"))
 
 
+def _convert_tts_to_pcm_s16le(raw: bytes, src_rate: int, dst_rate: int) -> bytes:
+    """Convert TTS raw audio (float32 LE) to 16-bit PCM and resample.
+
+    The /v1/audio/speech endpoint returns raw float32 LE samples with the
+    "pcm" response format; the headset expects 16-bit PCM at SAMPLE_RATE.
+    """
+    n = len(raw) // 4
+    if n == 0:
+        return b""
+    floats = struct.unpack(f"<{n}f", raw[: n * 4])
+    n_dst = int(n * dst_rate / src_rate)
+    out = bytearray()
+    for i in range(n_dst):
+        pos = i * (n - 1) / max(n_dst - 1, 1)
+        i0 = int(pos)
+        i1 = min(i0 + 1, n - 1)
+        frac = pos - i0
+        value = floats[i0] * (1 - frac) + floats[i1] * frac
+        clamped = max(-1.0, min(1.0, value))
+        out += int(clamped * 32767).to_bytes(2, "little", signed=True)
+    return bytes(out)
+
+
 def tts_pcm(client, text: str) -> bytes:
     """Synthesize text to speech (blocking) via /v1/audio/speech.
 
@@ -112,6 +136,7 @@ def tts_pcm(client, text: str) -> bytes:
         response = client.audio.speech.complete(
             model=TTS_MODEL,
             input=text,
+            voice_id=TTS_VOICE,
             response_format="pcm",
         )
         raw = _extract_tts_audio(response)
@@ -120,7 +145,7 @@ def tts_pcm(client, text: str) -> bytes:
         return b""
     if not raw:
         return b""
-    return _resample_pcm_s16le(raw, TTS_SAMPLE_RATE, SAMPLE_RATE)
+    return _convert_tts_to_pcm_s16le(raw, TTS_SAMPLE_RATE, SAMPLE_RATE)
 
 
 class SpeechPipeline:
