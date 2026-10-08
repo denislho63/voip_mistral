@@ -73,13 +73,12 @@ class TestVocabularyForDomain:
         vocab = dc.vocabulary_for_domain("théologique")
         assert vocab and "trinité" in vocab
 
-    def test_unknown_domain_falls_back_to_global(self):
+    def test_unknown_domain_yields_empty(self):
         vocab = dc.vocabulary_for_domain("astronomie")  # no dedicated file
-        assert vocab == dc._read_vocabulary_file(dc.GLOBAL_VOCABULARY_FILE)
+        assert vocab == []
 
-    def test_default_domain_global_fallback(self):
-        vocab = dc.vocabulary_for_domain(dc.DEFAULT_DOMAIN)
-        assert isinstance(vocab, list)
+    def test_default_domain_yields_empty(self):
+        assert dc.vocabulary_for_domain(dc.DEFAULT_DOMAIN) == []
 
 
 class TestSlug:

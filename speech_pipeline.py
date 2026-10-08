@@ -58,18 +58,20 @@ TTS_VOICE = os.environ.get("MISTRAL_TTS_VOICE", "5a271406-039d-46fe-835b-fbbb00e
 SAMPLE_RATE = 16000
 LANGUAGE = "fr"
 
-# Custom vocabulary applied to the batch (second) transcription pass.
-# By default it is loaded from custom_vocabulary.txt (one term per line,
-# '#' starts a comment); set PHONE_STREAM_VACABULARY to point to another
-# file, or PHONE_STREAM_VOCABULARY to an inline comma-separated list.
-VOCABULARY_FILE = ROOT / "custom_vocabulary.txt"
 
-
+# Vocabulary override for the batch (second) transcription pass:
+# PHONE_STREAM_VOCABULARY=term1,term2 (inline list) or
+# PHONE_STREAM_VACABULARY=/path/to/file (one term per line, '#' starts a
+# comment). By default the per-domain vocabularies of
+# detection_classification are used instead of a global list.
 def _load_custom_vocabulary() -> list[str]:
     inline = os.environ.get("PHONE_STREAM_VOCABULARY", "").strip()
     if inline:
         return [t.strip() for t in inline.split(",") if t.strip()]
-    path = Path(os.environ.get("PHONE_STREAM_VACABULARY", VOCABULARY_FILE))
+    path_env = os.environ.get("PHONE_STREAM_VACABULARY", "").strip()
+    if not path_env:
+        return []
+    path = Path(path_env)
     if not path.is_file():
         return []
     terms = []

@@ -13,8 +13,8 @@ Two layers, usable independently:
   DEFAULT_DOMAIN when the model is unavailable or answers oddly.
 - vocabulary_for_domain(domain): loads the vocabulary file for a
   domain. Vocabulary files live in vocabularies/<domain>.txt (one term
-  per line, '#' starts a comment). Missing domain file or unknown domain
-  falls back to custom_vocabulary.txt (the global list).
+  per line, '#' starts a comment). Unknown domain or missing file
+  yields an empty list (context_bias disabled for that phrase).
 
 Requires mistralai (same client as the rest of the pipeline). Without it,
 classification silently degrades to the default vocabulary.
@@ -65,7 +65,6 @@ DOMAINS = [
 ]
 
 VOCABULARY_DIR = ROOT / "vocabularies"
-GLOBAL_VOCABULARY_FILE = ROOT / "custom_vocabulary.txt"
 
 _SYSTEM_PROMPT = (
     "Tu es un expert en classification de textes. Ton rôle est de "
@@ -206,11 +205,9 @@ def _slug(domain: str) -> str:
 def vocabulary_for_domain(domain: str) -> list[str]:
     """Return the custom vocabulary suited to a domain.
 
-    Lookup order:
-    1. vocabularies/<domain>.txt
-    2. vocabularies/<domain slug>.txt (e.g. "automatisation de la
-       maison" -> automatisation_de_la_maison.txt)
-    3. custom_vocabulary.txt (global fallback)
+    Lookup: vocabularies/<domain slug>.txt, then
+    vocabularies/<domain>.txt (e.g. "automatisation de la maison" ->
+    automatisation_de_la_maison.txt).
 
     Empty vocabulary disables the context_bias for the batch pass.
     """
@@ -221,4 +218,4 @@ def vocabulary_for_domain(domain: str) -> list[str]:
         terms = _read_vocabulary_file(candidate)
         if terms:
             return terms
-    return _read_vocabulary_file(GLOBAL_VOCABULARY_FILE)
+    return []

@@ -5,7 +5,6 @@
 [tool.ruff]
 line-length = 88
 target-version = "py310"
-exclude = ["speech_2_text_context3.py"]  # standalone reference/example script
 
 [tool.ruff.lint]
 select = [

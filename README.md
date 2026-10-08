@@ -57,17 +57,16 @@ of that domain as `context_bias`:
 - Domain vocabularies live in `vocabularies/<domaine>.txt` (one term
   per line, `#` starts a comment). Example: `vocabularies/pastoral.txt`,
   `vocabularies/theologique.txt`, `vocabularies/informatique.txt`.
-- Unknown domain or missing file falls back to the global
-  `custom_vocabulary.txt`.
+- Unknown domain or missing file disables `context_bias` for that
+  phrase (empty vocabulary).
 - Override the classification model with
   `MISTRAL_CLASSIFICATION_MODEL` (default `mistral-small-latest`).
-- Without an API key or if classification fails, the global vocabulary
-  is used — transcription never breaks because of classification.
+- Without an API key or if classification fails, the vocabulary is
+  empty — transcription never breaks because of classification.
 
-The global custom vocabulary lives in `custom_vocabulary.txt` (one term
-per line, `#` starts a comment). Override the file path with
-`PHONE_STREAM_VACABULARY=/path/to/file`, or pass an inline list with
-`PHONE_STREAM_VOCABULARY=term1,term2`.
+Optional global override (all domains): `PHONE_STREAM_VOCABULARY=term1,term2`
+(inline list) or `PHONE_STREAM_VACABULARY=/path/to/file` (one term per
+line, `#` starts a comment).
 API keys must come from the environment — never hard-code them.
 
 ### processText() and process_command() hooks

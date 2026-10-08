@@ -78,9 +78,10 @@ class TestConvertTtsToPcmS16le:
 
 
 class TestCustomVocabulary:
-    def test_loads_repo_file(self):
-        assert CUSTOM_VOCABULARY, "custom_vocabulary.txt should yield terms"
-        assert "AIForMe" in CUSTOM_VOCABULARY
+    def test_default_is_empty(self):
+        # the global custom_vocabulary.txt was removed; per-domain
+        # vocabularies (detection_classification) replace it
+        assert CUSTOM_VOCABULARY == []
 
     def test_inline_env_override(self, monkeypatch):
         monkeypatch.setenv("PHONE_STREAM_VOCABULARY", "alpha, beta ,gamma")
