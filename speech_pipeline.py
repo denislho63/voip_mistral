@@ -245,15 +245,26 @@ class SpeechPipeline:
             # Domain classification from the realtime text: pick the
             # most fitting vocabulary before the batch (second) pass.
             domain = await self._classify(full_phrase)
+            self.last_domain = domain
             vocabulary = vocabulary_for_domain(domain)
             batch_text = await self._transcribe_batch(wav_data, vocabulary)
             if batch_text:
                 log.info("phrase (batch pass, domain=%s): %s", domain, batch_text)
 
+            # Record the phrase in the client's per-domain history, then
+            # hand that history to processText() as context.
+            history_records = self._record_phrase(domain, full_phrase, batch_text)
             # User hook: decide what to speak/display from both transcriptions
-            spoken_text = processText(full_phrase, batch_text)
+            spoken_text = processText(
+                full_phrase,
+                batch_text,
+                client_id=self.client_id,
+                domain=domain,
+                history=history_records,
+            )
             if not spoken_text:
                 return
+            self._record_response(domain, spoken_text)
             log.info("processText output: %s", spoken_text)
             await self.on_text(spoken_text, "transcription")
 
@@ -276,6 +287,20 @@ class SpeechPipeline:
             wav_file.setframerate(SAMPLE_RATE)
             wav_file.writeframes(pcm)
         return buf.getvalue()
+
+    def _record_phrase(
+        self, domain: str, realtime_text: str, batch_text: str
+    ) -> list[dict] | None:
+        """Store the finished phrase; return the domain history for the hook."""
+        if self.history is None:
+            return None
+        self.history.add_phrase(domain, batch_text or realtime_text)
+        return self.history.get(domain)
+
+    def _record_response(self, domain: str, text: str) -> None:
+        """Store the response produced for a phrase/command."""
+        if self.history is not None:
+            self.history.add_response(domain, text)
 
     async def _classify(self, phrase: str) -> str:
         """Classify the realtime text into a domain (non-blocking)."""

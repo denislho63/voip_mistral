@@ -13,10 +13,20 @@ translator, etc. Return an empty string to send nothing back.
 from __future__ import annotations
 
 
-def process_command(text: str) -> str:
+def process_command(
+    text: str,
+    client_id: str = "",
+    domain: str = "",
+    history: list[dict] | None = None,
+) -> str:
     """Return the response text for a user-typed message.
 
     Current behavior: echo the received text (the server speaks it back
     via text-to-speech and displays it).
+
+    `client_id` identifies the connected phone, `domain` is the
+    vocabulary domain the message is attached to, and `history` is the
+    client's history for that domain (list of {"role", "text", "domain"}
+    records, oldest first) — context to build smarter responses.
     """
     return text

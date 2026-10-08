@@ -48,13 +48,15 @@ class FakePipeline:
 async def test_pipeline_callbacks_reach_client(monkeypatch):
     conn = FakeConnection()
 
-    def fake_speech_pipeline(on_text, on_audio):
+    def fake_speech_pipeline(on_text, on_audio, client_id="", history=None):
         return FakePipeline(on_text, on_audio)
 
     monkeypatch.setattr(server, "pipeline_available", lambda: True)
     monkeypatch.setattr(server, "SpeechPipeline", fake_speech_pipeline)
 
-    session = server.ClientSession(connection=conn)
+    session = server.ClientSession(
+        connection=conn, client_id="test-client", history=None
+    )
     await server.start_pipeline(session)
     assert session.pipeline is not None
 

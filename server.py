@@ -57,6 +57,7 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from client_history import REGISTRY, ClientHistory, new_client_id
 from process_command import process_command
 from speech_pipeline import (
     SAMPLE_RATE,
@@ -107,11 +108,15 @@ class ClientSession:
 
     Created by phone_connection() and passed explicitly to the four
     audio/text hooks, instead of a module-level registry keyed by
-    connection object.
+    connection object. `client_id` is a stable identifier for this phone
+    across the connection's lifetime; `history` keeps this client's
+    texts/commands per vocabulary domain.
     """
 
     connection: ServerConnection
+    client_id: str = ""
     pipeline: SpeechPipeline | None = None
+    history: ClientHistory | None = None
 
 
 ACCESS_TOKEN = os.environ.get("PHONE_STREAM_TOKEN") or secrets.token_urlsafe(24)
@@ -193,8 +198,20 @@ async def processReceivedTextBlock(session: ClientSession, text: str) -> None:
     returned text back to the client (displayed, copyable) plus its
     text-to-speech rendering to the headset when the pipeline is enabled.
     """
-    response_text = process_command(text)
+    # Commands are attached to the pipeline's last classified domain so
+    # that the process_command hook sees the same per-domain history as
+    # the transcribed phrases.
+    pipeline = session.pipeline
+    domain = pipeline.last_domain if pipeline is not None else ""
+    history = session.history.get(domain) if session.history is not None else None
+    if session.history is not None:
+        session.history.add_command(domain, text)
+    response_text = process_command(
+        text, client_id=session.client_id, domain=domain, history=history
+    )
     if response_text:
+        if session.history is not None:
+            session.history.add_response(domain, response_text)
         await sendTextBlock(session, response_text)
 
     pipeline = session.pipeline
@@ -239,7 +256,9 @@ async def start_pipeline(session: ClientSession) -> None:
         await sendAudioBlock(session, pcm)
 
     try:
-        session.pipeline = SpeechPipeline(on_text, on_audio)
+        session.pipeline = SpeechPipeline(
+            on_text, on_audio, client_id=session.client_id, history=session.history
+        )
         log.info("speech pipeline started for %s", connection.remote_address)
     except Exception as exc:
         log.error("failed to start speech pipeline: %s", exc)
@@ -317,7 +336,11 @@ async def phone_connection(connection: ServerConnection) -> None:
     remote = connection.remote_address
     log.info("client connected: %s", remote)
 
-    session = ClientSession(connection=connection)
+    client_id = new_client_id()
+    session = ClientSession(
+        connection=connection, client_id=client_id, history=REGISTRY.register(client_id)
+    )
+    log.info("client id: %s", client_id)
     await start_pipeline(session)
     try:
         async for message in connection:
@@ -329,7 +352,8 @@ async def phone_connection(connection: ServerConnection) -> None:
         pass
     finally:
         await stop_pipeline(session)
-        log.info("client disconnected: %s", remote)
+        REGISTRY.drop(session.client_id)
+        log.info("client disconnected: %s (id %s)", remote, session.client_id)
 
 
 # --------------------------------------------------------------------------

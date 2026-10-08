@@ -69,10 +69,37 @@ Optional global override (all domains): `PHONE_STREAM_VOCABULARY=term1,term2`
 line, `#` starts a comment).
 API keys must come from the environment — never hard-code them.
 
+### Client identity and per-domain history
+
+Each connected phone gets a `client_id` (logged at connect, unique per
+connection). Every finished phrase and every user-typed command/response
+is recorded in that client's history, **split by vocabulary domain**:
+a phrase classified "pastoral" goes to the pastoral history of that
+client, etc.
+
+Both hooks receive this context:
+
+```python
+def processText(realtime_text, batch_text, client_id="", domain="", history=None): ...
+def process_command(text, client_id="", domain="", history=None): ...
+```
+
+`history` is the list of this client's records **for the detected
+domain** (oldest first), each `{"role": "phrase"|"response"|"command",
+"text": ..., "domain": ...}`. Commands are attached to the last domain
+classified from the audio. Use it to build answers aware of the
+conversation (e.g. pass it to an LLM as context).
+
+- Histories are in-memory and dropped when the client disconnects
+  (`PHONE_STREAM_HISTORY` caps entries per domain, default 50).
+- With several phones connected at once, each `client_id` has its own
+  isolated history — responses never mix between clients.
+
 ### processText() and process_command() hooks
 
-`processText(realtime_text, batch_text)` (in `process_text.py`) receives
-**both transcriptions** of each finished phrase and returns the text to send
+`processText(realtime_text, batch_text, client_id, domain, history)`
+(in `process_text.py`) receives **both transcriptions** of each finished
+phrase plus the client/domain context and returns the text to send
 back. That text is:
 
 1. sent to the phone as text via `sendTextBlock()` (displayed, copyable),
