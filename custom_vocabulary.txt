@@ -1,8 +1,0 @@
-# Custom vocabulary for the batch (second) transcription pass.
-# One term per line; '#' starts a comment.
-# Point PHONE_STREAM_VACABULARY at another file or set
-# PHONE_STREAM_VOCABULARY to a comma-separated list to override.
-AIForMe
-Lhospitalier
-acronyme
-Marthuret
