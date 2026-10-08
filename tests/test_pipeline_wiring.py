@@ -74,3 +74,16 @@ async def test_stop_pipeline_without_pipeline():
     conn = FakeConnection()
     session = server.ClientSession(connection=conn)
     await server.stop_pipeline(session)  # must not raise
+
+
+async def test_real_pipeline_signature_accepts_context():
+    """Regression test: SpeechPipeline.__init__ must accept client_id and
+    history (the server passes them; a signature drift crashed it with
+    "unexpected keyword argument 'client_id'").
+    """
+    import inspect
+
+    import speech_pipeline
+
+    params = set(inspect.signature(speech_pipeline.SpeechPipeline.__init__).parameters)
+    assert {"client_id", "history"} <= params

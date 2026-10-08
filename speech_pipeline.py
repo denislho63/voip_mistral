@@ -25,9 +25,13 @@ import sys
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from detection_classification import find_domain, vocabulary_for_domain
 from process_text import processText
+
+if TYPE_CHECKING:
+    from client_history import ClientHistory
 
 ROOT = Path(__file__).resolve().parent
 
@@ -176,15 +180,24 @@ class SpeechPipeline:
     (better) batch text is delivered via on_text().
     """
 
-    def __init__(self, on_text: OnText, on_audio: OnAudio):
+    def __init__(
+        self,
+        on_text: OnText,
+        on_audio: OnAudio,
+        client_id: str = "",
+        history: ClientHistory | None = None,
+    ):
         api_key = os.environ["MISTRAL_API_KEY"]
         self.client = Mistral(api_key=api_key)
         self.audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=SAMPLE_RATE)
         self.on_text = on_text
         self.on_audio = on_audio
+        self.client_id = client_id
+        self.history = history
         self.queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.audio = io.BytesIO()
         self.phrase = ""
+        self.last_domain = ""
         self.task: asyncio.Task | None = asyncio.create_task(self._run())
 
     async def feed(self, pcm: bytes) -> None:
