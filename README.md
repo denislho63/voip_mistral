@@ -47,8 +47,25 @@ export MISTRAL_API_KEY=...        # Windows: set MISTRAL_API_KEY=...
 Without `mistralai` or `MISTRAL_API_KEY` the server still runs and serves
 the app; audio blocks are dropped and a warning is logged.
 
-The custom vocabulary lives in `custom_vocabulary.txt` (one term per line,
-`#` starts a comment). Override the file path with
+### Domain-adaptive vocabulary (classification)
+
+Before the batch pass, the **realtime text of the finished phrase is
+classified into a domain** (`detection_classification.py`, small chat
+model, temperature 0). The batch transcription then uses the vocabulary
+of that domain as `context_bias`:
+
+- Domain vocabularies live in `vocabularies/<domaine>.txt` (one term
+  per line, `#` starts a comment). Example: `vocabularies/pastoral.txt`,
+  `vocabularies/theologique.txt`, `vocabularies/informatique.txt`.
+- Unknown domain or missing file falls back to the global
+  `custom_vocabulary.txt`.
+- Override the classification model with
+  `MISTRAL_CLASSIFICATION_MODEL` (default `mistral-small-latest`).
+- Without an API key or if classification fails, the global vocabulary
+  is used — transcription never breaks because of classification.
+
+The global custom vocabulary lives in `custom_vocabulary.txt` (one term
+per line, `#` starts a comment). Override the file path with
 `PHONE_STREAM_VACABULARY=/path/to/file`, or pass an inline list with
 `PHONE_STREAM_VOCABULARY=term1,term2`.
 API keys must come from the environment — never hard-code them.

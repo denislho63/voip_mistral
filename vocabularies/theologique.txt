@@ -1,0 +1,21 @@
+# Vocabulaire théologique (context_bias pour la transcription batch)
+trinité
+incarnation
+eschatologie
+sotériologie
+eucharistie
+kerygme
+providence
+justification
+sanctification
+prédestination
+pneumatologie
+christologie
+ecclésiologie
+hamartiologie
+Aquinas
+Calvin
+Augustin
+Athanase
+Chalcédoine
+Nicée

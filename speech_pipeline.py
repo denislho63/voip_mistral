@@ -26,6 +26,7 @@ import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
+from detection_classification import find_domain, vocabulary_for_domain
 from process_text import processText
 
 ROOT = Path(__file__).resolve().parent
@@ -274,10 +275,13 @@ class SpeechPipeline:
             if not full_phrase.strip():
                 return
             log.info("phrase (realtime pass): %s", full_phrase)
-
-            batch_text = await self._transcribe_batch(wav_data)
+            # Domain classification from the realtime text: pick the
+            # most fitting vocabulary before the batch (second) pass.
+            domain = await self._classify(full_phrase)
+            vocabulary = vocabulary_for_domain(domain)
+            batch_text = await self._transcribe_batch(wav_data, vocabulary)
             if batch_text:
-                log.info("phrase (batch pass, custom vocabulary): %s", batch_text)
+                log.info("phrase (batch pass, domain=%s): %s", domain, batch_text)
 
             # User hook: decide what to speak/display from both transcriptions
             spoken_text = processText(full_phrase, batch_text)
@@ -306,19 +310,29 @@ class SpeechPipeline:
             wav_file.writeframes(pcm)
         return buf.getvalue()
 
-    async def _transcribe_batch(self, wav_data: bytes) -> str:
-        """Second pass: batch transcription biased with the custom vocabulary."""
+    async def _classify(self, phrase: str) -> str:
+        """Classify the realtime text into a domain (non-blocking)."""
+        return await asyncio.to_thread(find_domain, phrase, self.client)
+
+    async def _transcribe_batch(self, wav_data: bytes, vocabulary: list[str]) -> str:
+        """Second pass: batch transcription biased with a domain vocabulary.
+
+        An empty vocabulary disables context_bias for this phrase.
+        """
         if not wav_data:
             return ""
         try:
             audio_file = File(content=wav_data, file_name="phrase.wav")
 
             def call() -> str:
+                kwargs = {}
+                if vocabulary:
+                    kwargs["context_bias"] = vocabulary
                 response = self.client.audio.transcriptions.complete(
                     model=BATCH_MODEL,
                     file=audio_file,
-                    context_bias=CUSTOM_VOCABULARY,
                     language=LANGUAGE,
+                    **kwargs,
                 )
                 return response.text.strip()
 

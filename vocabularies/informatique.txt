@@ -1,0 +1,21 @@
+# Vocabulaire informatique (context_bias pour la transcription batch)
+WebSocket
+PCM
+TLS
+API
+latence
+redimensionnement
+échantillonnage
+transcription
+inférence
+GPU
+Kubernetes
+Linux
+asynchrone
+middleware
+webhook
+protobuf
+sérialisation
+chiffré
+authentification
+rate limit
