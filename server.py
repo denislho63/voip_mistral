@@ -37,6 +37,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import ssl
 import sys
@@ -133,6 +134,22 @@ def _token_ok(request: Request) -> bool:
         parsed = urllib.parse.urlsplit(request.path)
         presented = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
     return secrets.compare_digest(presented, ACCESS_TOKEN)
+
+
+def _client_id_ok(candidate: str) -> str:
+    """Accept a client-provided persistent id, or generate a fresh one.
+
+    The id lets the server recognize a phone across WebSocket
+    reconnections and keep its per-domain history. It only needs to be
+    unique and harmless; anything exotic is replaced.
+    """
+    candidate = (candidate or "").strip()
+    if not candidate or len(candidate) > 64 or not CLIENT_ID_RE.fullmatch(candidate):
+        return new_client_id()
+    return candidate
+
+
+CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 def _wav_bytes(pcm: bytes) -> bytes:
@@ -326,6 +343,14 @@ async def handle_binary_frame(session: ClientSession, data: bytes) -> None:
         )
 
 
+def _handshake_client_id(connection: ServerConnection) -> str:
+    """Read the client_id passed in the WebSocket handshake query string."""
+    path = getattr(connection, "request", None)
+    path = getattr(path, "path", "") or ""
+    parsed = urllib.parse.urlsplit(path)
+    return urllib.parse.parse_qs(parsed.query).get("client_id", [""])[0]
+
+
 # --------------------------------------------------------------------------
 # WebSocket connection handler
 # --------------------------------------------------------------------------
@@ -336,7 +361,7 @@ async def phone_connection(connection: ServerConnection) -> None:
     remote = connection.remote_address
     log.info("client connected: %s", remote)
 
-    client_id = new_client_id()
+    client_id = _client_id_ok(_handshake_client_id(connection))
     session = ClientSession(
         connection=connection, client_id=client_id, history=REGISTRY.register(client_id)
     )
@@ -352,7 +377,9 @@ async def phone_connection(connection: ServerConnection) -> None:
         pass
     finally:
         await stop_pipeline(session)
-        REGISTRY.drop(session.client_id)
+        # History is intentionally kept: the client reconnects with the
+        # same id and resumes it. A TTL sweeps inactive clients; a server
+        # restart clears everything (in-memory only).
         log.info("client disconnected: %s (id %s)", remote, session.client_id)
 
 

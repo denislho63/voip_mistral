@@ -151,3 +151,41 @@ class TestHookSignatures:
         assert processText("rt", "batch") == "batch"
         assert processText("rt", "") == "rt"
         assert process_command("hello") == "hello"
+
+
+class TestReconnectionPersistence:
+    def test_history_resumes_with_same_id(self):
+        reg = HistoryRegistry()
+        h = reg.register("alice")
+        h.add_phrase("pastoral", "phrase 1")
+        # disconnect + reconnect with the same client_id
+        h2 = reg.register("alice")
+        assert h2 is h
+        assert h2.texts("pastoral") == ["phrase 1"]
+
+    def test_history_not_dropped_on_disconnect(self):
+        reg = HistoryRegistry()
+        reg.register("alice").add_phrase("pastoral", "x")
+        # the server no longer calls drop() on disconnect
+        assert "alice" in reg.client_ids()
+        assert reg.get("alice").texts("pastoral") == ["x"]
+
+    def test_ttl_sweeps_inactive_clients(self, monkeypatch):
+        import time as time_mod
+
+        reg = HistoryRegistry()
+        h = reg.register("alice")
+        h.add_phrase("pastoral", "x")
+        # simulate long inactivity: last_seen far in the past
+        h.last_seen = time_mod.monotonic() - 999999
+        # registering bob triggers a sweep that forgets alice
+        reg.register("bob")
+        assert "alice" not in reg.client_ids()
+
+    def test_ttl_extended_by_activity(self, monkeypatch):
+        reg = HistoryRegistry()
+        h = reg.register("alice")
+        h.add_phrase("pastoral", "x")
+        assert not h.expired()
+        reg.register("bob")  # sweep runs, alice is fresh
+        assert "alice" in reg.client_ids()

@@ -90,8 +90,14 @@ domain** (oldest first), each `{"role": "phrase"|"response"|"command",
 classified from the audio. Use it to build answers aware of the
 conversation (e.g. pass it to an LLM as context).
 
-- Histories are in-memory and dropped when the client disconnects
-  (`PHONE_STREAM_HISTORY` caps entries per domain, default 50).
+- The phone app stores its `client_id` in localStorage and sends it on
+  every WebSocket connect: **the history survives reconnections** (the
+  server logs "history resumed"). Without a provided id, a fresh one is
+  generated per connection.
+- Histories are **in-memory only**: a server restart forgets everything
+  (as intended). An idle client's history is swept after
+  `PHONE_STREAM_HISTORY_TTL` seconds (default 3600); each activity
+  extends it. `PHONE_STREAM_HISTORY` caps entries per domain (default 50).
 - With several phones connected at once, each `client_id` has its own
   isolated history — responses never mix between clients.
 

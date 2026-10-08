@@ -99,7 +99,19 @@
   // (the server refuses any request without it). Page and WebSocket must
   // both be loaded over TLS (https/wss) - the server has no plaintext port.
   const TOKEN = new URLSearchParams(location.search).get("token") || "";
-  const WS_URL = (location.protocol === "https:" ? "wss://" : "wss://") + location.host + "/phone?token=" + encodeURIComponent(TOKEN);
+  // Persistent client id: survives reconnections and page reloads
+  // (localStorage), so the server can keep this client's history across
+  // WebSocket reconnects. Cleared only if the browser forgets it.
+  const CLIENT_ID_KEY = "phone-stream-client-id";
+  let clientId = null;
+  try { clientId = localStorage.getItem(CLIENT_ID_KEY); } catch (e) {}
+  if (!clientId) {
+    clientId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + "-" + Math.random().toString(36).slice(2);
+    try { localStorage.setItem(CLIENT_ID_KEY, clientId); } catch (e) {}
+  }
+  const WS_URL = (location.protocol === "https:" ? "wss://" : "wss://")
+    + location.host + "/phone?token=" + encodeURIComponent(TOKEN)
+    + "&client_id=" + encodeURIComponent(clientId);
 
   // ---- elements -------------------------------------------------------
   const dot = document.getElementById("status-dot");
