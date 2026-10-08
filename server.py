@@ -74,7 +74,12 @@ CERT_FILE = ROOT / "certs" / "cert.pem"
 KEY_FILE = ROOT / "certs" / "key.pem"
 
 HOST = "0.0.0.0"
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8443
+PORT = 8443
+if len(sys.argv) > 1:
+    try:
+        PORT = int(sys.argv[1])
+    except ValueError:
+        pass  # non-numeric argument (e.g. pytest's): keep default
 
 PING_INTERVAL = 20  # seconds; keeps NATs open, detects dead peers
 MAX_MESSAGE_SIZE = 1 << 22  # 4 MiB, ample for audio blocks
@@ -228,10 +233,10 @@ async def start_pipeline(session: ClientSession) -> None:
         return
 
     async def on_text(text: str, tag: str) -> None:
-        await sendTextBlock(connection, text)
+        await sendTextBlock(session, text)
 
     async def on_audio(pcm: bytes) -> None:
-        await sendAudioBlock(connection, pcm)
+        await sendAudioBlock(session, pcm)
 
     try:
         session.pipeline = SpeechPipeline(on_text, on_audio)
