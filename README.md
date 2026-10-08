@@ -1,5 +1,7 @@
 # phone-stream
 
+[![CI](https://github.com/denislho63/voip_mistral/actions/workflows/ci.yml/badge.svg)](https://github.com/denislho63/voip_mistral/actions/workflows/ci.yml)
+
 A phone-like web application served by a Python secure-WebSocket (wss) server.
 
 - The **client** (mobile browser) captures microphone audio and streams it to
@@ -80,6 +82,16 @@ sent as text and converted to speech. Default: echoes the received text
 | client → server, text | `{"type": "text", "text": "..."}` |
 | server → client, binary | raw audio block for the headset |
 | server → client, text | `{"type": "text", "text": "..."}` (optional `"tag"` shown as label) |
+
+## Development
+
+- **Lint / format**: `ruff check .` and `ruff format --check .` (config in
+  `pyproject.toml`; run `pip install ruff`).
+- **Tests**: `pip install -r requirements.txt pytest pytest-asyncio`, then
+  `pytest tests/` (generate certs with `bash gen_certs.sh` first; set
+  `PHONE_STREAM_TOKEN=whatever` to pin the token).
+- **CI**: GitHub Actions (`.github/workflows/ci.yml`) — lint + tests on
+  Python 3.10 and 3.12, server booted in degraded mode (no API key).
 
 ## Run
 

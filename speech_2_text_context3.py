@@ -7,7 +7,7 @@ from mistralai.client.models import (
     TranscriptionStreamTextDelta,
     File,
 )
-#from mistralai.models.chat_completion import ChatMessage
+# from mistralai.models.chat_completion import ChatMessage
 
 from pydub import AudioSegment
 import wave
@@ -28,25 +28,21 @@ client = Mistral(api_key=api_key)
 audio_format = AudioFormat(encoding="pcm_s16le", sample_rate=16000)
 
 # Vocabulaire personnalisé
-custom_vocabulary = [
-    "AIForMe",
-    "Lhospitalier",
-    "acronyme",
-    "Marthuret"
-]
+custom_vocabulary = ["AIForMe", "Lhospitalier", "acronyme", "Marthuret"]
+
 
 def find_domain(phrase: str) -> str:
     global client
-# Configuration des messages
+    # Configuration des messages
     messages = [
         {
-            "role":"system",
-            "content":"Tu es un expert en classification de textes. Ton rôle est de déterminer à quel domaine appartient une phrase parmi les suivants : pastoral, théologique, automatisation de la maison, astronomie, informatique, médecine, droit, économie, littérature, histoire, géographie, biologie, physique, chimie, arts, musique, sport, politique, philosophie, psychologie, sociologie. Réponds uniquement avec les 3 nom de domaine les plus pertinents, sans explication."
+            "role": "system",
+            "content": "Tu es un expert en classification de textes. Ton rôle est de déterminer à quel domaine appartient une phrase parmi les suivants : pastoral, théologique, automatisation de la maison, astronomie, informatique, médecine, droit, économie, littérature, histoire, géographie, biologie, physique, chimie, arts, musique, sport, politique, philosophie, psychologie, sociologie. Réponds uniquement avec les 3 nom de domaine les plus pertinents, sans explication.",
         },
         {
-            "role":"user",
-            "content":f"À quel domaine appartient la phrase suivante : '{phrase}' ?"
-        }
+            "role": "user",
+            "content": f"À quel domaine appartient la phrase suivante : '{phrase}' ?",
+        },
     ]
 
     # Appel à l'API
@@ -54,12 +50,13 @@ def find_domain(phrase: str) -> str:
         model="mistral-tiny",
         messages=messages,
         temperature=0.0,  # Réponse déterministe
-        max_tokens=20
+        max_tokens=20,
     )
     # Affichage du domaine
     domaine = response.choices[0].message.content.strip()
     print(f"Domaine de la phrase : {domaine}")
     return domaine
+
 
 # Buffer pour stocker les chunks audio
 current_phrase_audio = io.BytesIO()
@@ -67,7 +64,10 @@ phrase = ""
 output_dir = "recorded_phrases"
 os.makedirs(output_dir, exist_ok=True)
 
-async def iter_microphone(*, sample_rate: int, chunk_duration_ms: int) -> AsyncIterator[bytes]:
+
+async def iter_microphone(
+    *, sample_rate: int, chunk_duration_ms: int
+) -> AsyncIterator[bytes]:
     """Yield microphone PCM chunks using PyAudio (16-bit mono)."""
     p = pyaudio.PyAudio()
     chunk_samples = int(sample_rate * chunk_duration_ms / 1000)
@@ -90,7 +90,10 @@ async def iter_microphone(*, sample_rate: int, chunk_duration_ms: int) -> AsyncI
         stream.close()
         p.terminate()
 
-def save_phrase_to_mp3_and_get_wav(audio_buffer: io.BytesIO, phrase_text: str) -> tuple[str, bytes]:
+
+def save_phrase_to_mp3_and_get_wav(
+    audio_buffer: io.BytesIO, phrase_text: str
+) -> tuple[str, bytes]:
     """
     Sauvegarde en MP3 ET retourne les données au format WAV pour l'API.
     """
@@ -113,7 +116,7 @@ def save_phrase_to_mp3_and_get_wav(audio_buffer: io.BytesIO, phrase_text: str) -
 
     # Créer un fichier WAV en mémoire pour l'API
     wav_buffer = io.BytesIO()
-    with wave.open(wav_buffer, 'wb') as wav_file:
+    with wave.open(wav_buffer, "wb") as wav_file:
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)  # 16 bits
         wav_file.setframerate(16000)
@@ -122,12 +125,13 @@ def save_phrase_to_mp3_and_get_wav(audio_buffer: io.BytesIO, phrase_text: str) -
     print("Returning wav")
     return mp3_path, wav_data
 
+
 async def transcribe_batch(wav_data: bytes) -> str:
     """Transcription batch avec vocabulaire personnalisé."""
     try:
         audio_file = File(
             content=wav_data,
-            file_name="temp_audio.wav"  # Format WAV pour l'API
+            file_name="temp_audio.wav",  # Format WAV pour l'API
         )
         print("Calling batch transcription")
         response = client.audio.transcriptions.complete(
@@ -140,6 +144,7 @@ async def transcribe_batch(wav_data: bytes) -> str:
     except Exception as e:
         print(f"\nErreur transcription batch: {e}")
         return ""
+
 
 async def process_audio_stream():
     global phrase, current_phrase_audio
@@ -161,7 +166,7 @@ async def process_audio_stream():
             if isinstance(event, RealtimeTranscriptionSessionCreated):
                 print("Session created.")
             elif isinstance(event, TranscriptionStreamTextDelta):
-                if event.text in ['.', '!', '?']:
+                if event.text in [".", "!", "?"]:
                     print()
                     full_phrase = phrase + event.text
                     print(f"Phrase complète (temps réel): {full_phrase}")
@@ -196,11 +201,10 @@ async def process_audio_stream():
     except KeyboardInterrupt:
         print("\nStopping...")
 
+
 async def main():
     await process_audio_stream()
 
+
 if __name__ == "__main__":
     sys.exit(asyncio.run(main()))
-
-
-

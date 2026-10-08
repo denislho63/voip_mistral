@@ -23,8 +23,8 @@ import logging
 import os
 import sys
 import wave
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable
 
 from process_text import processText
 
@@ -95,6 +95,7 @@ def _extract_tts_audio(response) -> bytes:
             return value
         if isinstance(value, str):
             import base64
+
             try:
                 return base64.b64decode(value)
             except Exception:
@@ -120,9 +121,9 @@ def _resample_pcm_s16le(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
         return b""
     n_dst = int(n_src * dst_rate / src_rate)
     if n_dst == 0:
-        return b""
-    if n_dst == 1:
         out = array.array("h", [samples[0]])
+    elif n_dst == 1:
+        out = array.array("h", [samples[-1]])
     else:
         out = array.array("h", bytes(2 * n_dst))
         step = (n_src - 1) / (n_dst - 1)
@@ -157,7 +158,9 @@ def _convert_tts_to_pcm_s16le(raw: bytes, src_rate: int, dst_rate: int) -> bytes
         floats.byteswap()
     n_dst = int(n * dst_rate / src_rate)
     if n_dst == 0:
-        return b""
+        return array.array(
+            "h", [int(max(-1.0, min(1.0, floats[-1])) * 32767)]
+        ).tobytes()
     out = array.array("h", bytes(2 * n_dst))
     if n_dst == 1:
         out[0] = int(max(-1.0, min(1.0, floats[0])) * 32767)

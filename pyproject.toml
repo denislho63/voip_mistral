@@ -1,0 +1,28 @@
+# ruff is used by the CI (lint + format). The rule selection is
+# deliberately conservative: only rules that catch real bugs and keep
+# imports tidy are enabled; style-only opinions are left out.
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = ["speech_2_text_context3.py"]  # standalone reference/example script
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (unused imports/names, undefined names...)
+    "I",   # isort (import sorting)
+    "UP",  # pyupgrade (deprecated syntax)
+    "B",   # bugbear (common bug patterns)
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "E501",  # line length: handled by ruff format, not a lint error
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "process_command",
+    "process_text",
+    "speech_pipeline",
+]

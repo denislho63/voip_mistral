@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check .
+      - name: Check formatting
+        run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        # requirements.txt installs mistralai, but MISTRAL_API_KEY is
+        # deliberately NOT set: the server must run in degraded mode.
+        run: pip install -r requirements.txt pytest pytest-asyncio
+      - name: Generate self-signed certificate
+        run: |
+          mkdir -p certs
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+            -keyout certs/key.pem -out certs/cert.pem \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+      - name: Run tests
+        env:
+          PHONE_STREAM_TOKEN: ci-test-token
+        run: pytest tests/ -v

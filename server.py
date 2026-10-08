@@ -32,7 +32,6 @@ generated at startup and logged. The server only ever listens on TLS
 from __future__ import annotations
 
 import asyncio
-import html
 import io
 import json
 import logging
@@ -63,7 +62,6 @@ from speech_pipeline import (
     SAMPLE_RATE,
     SpeechPipeline,
     pipeline_available,
-    tts_pcm,
 )
 
 # --------------------------------------------------------------------------
@@ -78,8 +76,8 @@ KEY_FILE = ROOT / "certs" / "key.pem"
 HOST = "0.0.0.0"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8443
 
-PING_INTERVAL = 20            # seconds; keeps NATs open, detects dead peers
-MAX_MESSAGE_SIZE = 1 << 22    # 4 MiB, ample for audio blocks
+PING_INTERVAL = 20  # seconds; keeps NATs open, detects dead peers
+MAX_MESSAGE_SIZE = 1 << 22  # 4 MiB, ample for audio blocks
 MAX_TEXT_LEN = 64 * 1024
 
 logging.basicConfig(
@@ -108,7 +106,8 @@ class ClientSession:
     """
 
     connection: ServerConnection
-    pipeline: "SpeechPipeline | None" = None
+    pipeline: SpeechPipeline | None = None
+
 
 ACCESS_TOKEN = os.environ.get("PHONE_STREAM_TOKEN") or secrets.token_urlsafe(24)
 
@@ -117,7 +116,7 @@ def _token_ok(request: Request) -> bool:
     """Validate the access token from the query string or Bearer header."""
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        presented = auth[len("Bearer "):].strip()
+        presented = auth[len("Bearer ") :].strip()
     else:
         presented = ""
     if not presented:
@@ -146,9 +145,8 @@ def _sanitize_pcm(block: bytes) -> bytes:
 # The four required functions — now implemented
 # --------------------------------------------------------------------------
 
-async def processReceivedAudioBlock(
-    session: ClientSession, audio_block: bytes
-) -> None:
+
+async def processReceivedAudioBlock(session: ClientSession, audio_block: bytes) -> None:
     """Handle one binary audio block received from a client microphone.
 
     Called automatically by the connection handler whenever a binary frame
@@ -217,6 +215,7 @@ async def sendTextBlock(session: ClientSession, text: str) -> None:
 # Pipeline lifecycle — bound to the connection handler
 # --------------------------------------------------------------------------
 
+
 async def start_pipeline(session: ClientSession) -> None:
     """Create the speech pipeline for a new client, if the environment allows."""
     connection = session.connection
@@ -254,6 +253,7 @@ async def stop_pipeline(session: ClientSession) -> None:
 # Frame routing
 # --------------------------------------------------------------------------
 
+
 async def handle_text_frame(session: ClientSession, raw: str) -> None:
     """Decode/validate a text frame, then dispatch to the hook."""
     text: str | None
@@ -267,7 +267,10 @@ async def handle_text_frame(session: ClientSession, raw: str) -> None:
         text = raw  # plain-text frame, not JSON-wrapped
 
     if text is None:
-        log.warning("ignoring malformed text frame from %s", connection.remote_address)
+        log.warning(
+            "ignoring malformed text frame from %s",
+            session.connection.remote_address,
+        )
         return
 
     if len(text) > MAX_TEXT_LEN:
@@ -303,6 +306,7 @@ async def handle_binary_frame(session: ClientSession, data: bytes) -> None:
 # WebSocket connection handler
 # --------------------------------------------------------------------------
 
+
 async def phone_connection(connection: ServerConnection) -> None:
     """Lifecycle for one phone client."""
     remote = connection.remote_address
@@ -327,16 +331,19 @@ async def phone_connection(connection: ServerConnection) -> None:
 # Static file serving (same TLS port, via process_request)
 # --------------------------------------------------------------------------
 
+
 def http_response(status: int, reason: str, body: bytes, content_type: str) -> Response:
     return Response(
         status,
         reason,
-        Headers([
-            ("Content-Type", content_type),
-            ("Content-Length", str(len(body))),
-            ("Cache-Control", "no-store"),
-            ("X-Content-Type-Options", "nosniff"),
-        ]),
+        Headers(
+            [
+                ("Content-Type", content_type),
+                ("Content-Length", str(len(body))),
+                ("Cache-Control", "no-store"),
+                ("X-Content-Type-Options", "nosniff"),
+            ]
+        ),
         body,
     )
 
@@ -395,6 +402,7 @@ async def process_request(
 # TLS + startup
 # --------------------------------------------------------------------------
 
+
 def build_ssl_context() -> ssl.SSLContext:
     if not CERT_FILE.is_file() or not KEY_FILE.is_file():
         sys.stderr.write(
@@ -425,14 +433,22 @@ async def main() -> None:
     ):
         scheme_host = f"https://<your-ip>:{PORT}"
         if os.environ.get("PHONE_STREAM_TOKEN"):
-            log.info("phone-stream server listening on %s:%d (token from PHONE_STREAM_TOKEN)", HOST, PORT)
+            log.info(
+                "phone-stream server listening on %s:%d (token from PHONE_STREAM_TOKEN)",
+                HOST,
+                PORT,
+            )
         else:
             log.info(
                 "phone-stream server listening on %s:%d "
-                "(random access token for this run)", HOST, PORT
+                "(random access token for this run)",
+                HOST,
+                PORT,
             )
         log.info("app:   %s/?token=%s", scheme_host, ACCESS_TOKEN)
-        log.info("ws:    wss://<your-ip>:%d/phone (Authorization: Bearer or ?token=)", PORT)
+        log.info(
+            "ws:    wss://<your-ip>:%d/phone (Authorization: Bearer or ?token=)", PORT
+        )
         await asyncio.get_running_loop().create_future()  # run forever
 
 
