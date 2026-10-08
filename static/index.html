@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Phone Stream</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #1a2027; --line: #2c3540;
+    --fg: #e8edf2; --dim: #9aa7b2; --acc: #4da3ff; --ok: #3ecf6f; --warn: #ffb44d; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+    overscroll-behavior: none;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: var(--panel);
+    border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  header h1 { font-size: 16px; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); flex: 0 0 auto; }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .status { font-size: 12px; color: var(--dim); flex: 0 0 auto; max-width: 40%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  main { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+  #log {
+    flex: 1 1 auto; overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .msg {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 8px 12px; white-space: pre-wrap;
+    word-break: break-word; user-select: text; -webkit-user-select: text;
+    animation: pop .15s ease-out;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+  .msg .row { display: flex; align-items: center; gap: 8px; }
+  .msg .tag { font-size: 10px; letter-spacing: .08em; color: var(--dim); text-transform: uppercase; }
+  .msg .actions { flex: 1; text-align: right; opacity: 0; transition: opacity .15s; }
+  .msg:hover .actions, .msg:focus-within .actions { opacity: 1; }
+  .msg audio { width: 100%; margin-top: 6px; }
+  button {
+    background: var(--acc); color: #fff; border: 0; border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; cursor: pointer;
+  }
+  button:active { transform: scale(.96); }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--dim); }
+  button.off { background: #555; }
+  footer {
+    flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 12px; background: var(--panel); border-top: 1px solid var(--line);
+  }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .controls button { flex: 1; padding: 10px; font-size: 14px; border-radius: 10px; }
+  .composer { display: flex; gap: 8px; }
+  #text-input {
+    flex: 1; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px;
+    font: inherit; resize: none; min-height: 42px; max-height: 120px;
+  }
+  #send-btn { flex: 0 0 auto; padding: 10px 16px; font-size: 14px; border-radius: 10px; }
+  #banner {
+    display: none; padding: 8px 12px; font-size: 13px;
+    background: #3a2e14; color: var(--warn); border-bottom: 1px solid #6a541f;
+  }
+  #banner.show { display: block; }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="status-dot"></div>
+  <h1>Phone Stream</h1>
+  <div class="status" id="status-text">disconnected</div>
+</header>
+<div id="banner">Sending paused &mdash; phone locked. Received text is kept.</div>
+<main>
+  <div id="log"></div>
+  <footer>
+    <div class="controls">
+      <button id="mic-btn" class="off">&#127908; Hold to talk</button>
+      <button id="speaker-btn" class="off">&#128266; Speaker off</button>
+    </div>
+    <div class="composer">
+      <textarea id="text-input" rows="1" placeholder="Type a message to the server&hellip;"></textarea>
+      <button id="send-btn">Send</button>
+    </div>
+  </footer>
+</main>
+<script>
+"use strict";
+(() => {
+  // ---- configuration -------------------------------------------------
+  const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/phone";
+
+  // ---- elements -------------------------------------------------------
+  const dot = document.getElementById("status-dot");
+  const statusText = document.getElementById("status-text");
+  const banner = document.getElementById("banner");
+  const logEl = document.getElementById("log");
+  const micBtn = document.getElementById("mic-btn");
+  const speakerBtn = document.getElementById("speaker-btn");
+  const textInput = document.getElementById("text-input");
+  const sendBtn = document.getElementById("send-btn");
+
+  // ---- state ----------------------------------------------------------
+  let ws = null;
+  let session = 0;                  // increments on each (re)connect
+  let micActive = false;            // user intent
+  let speakerOn = false;            // user intent
+  let locked = false;               // phone lock / page hidden
+  let sendingPaused = false;        // locked && (micActive || speakerOn)
+  let micProcessor = null;         // ScriptProcessorNode for PCM capture
+  let stream = null;                // getUserMedia stream
+  let outQueue = [];                // binary blocks awaiting ws drain
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const pending = new Map();        // session -> [binary blocks], audio before play()
+  let pendingSession = null;
+
+  const pcm = {
+    sampleRate: 16000,              // agreed with server
+    channels: 1,
+    format: "S16",
+  };
+
+  // ---- status UI ------------------------------------------------------
+  function setStatus(ok, text, cls) {
+    dot.className = "dot" + (cls ? " " + cls : "");
+    statusText.textContent = text;
+  }
+
+  // ---- lock / visibility detection -------------------------------------
+  function updateLockState() {
+    locked = document.hidden;
+    applySendingState();
+  }
+  document.addEventListener("visibilitychange", updateLockState);
+  window.addEventListener("pagehide", updateLockState);
+
+  function applySendingState() {
+    sendingPaused = locked && (micActive || speakerOn);
+    banner.classList.toggle("show", locked && (micActive || speakerOn));
+    if (locked) {
+      // stop all outbound streaming; received text is kept (DOM persists)
+      if (micProcessor) { try { micProcessor.disconnect(); } catch (e) {} micProcessor = null; }
+    } else if (micActive) {
+      startMic(); // resume
+    }
+  }
+
+  // ---- websocket -------------------------------------------------------
+  function connect() {
+    const mySession = ++session;
+    setStatus(false, "connecting…");
+    ws = new WebSocket(WS_URL);
+    ws.binaryType = "arraybuffer";
+    pending.set(mySession, []);
+    ws.onopen = () => {
+      pendingSession = mySession;
+      setStatus(true, "connected", "ok");
+      if (micActive && !locked) startMic();
+      // replay any blocks queued while disconnected? (kept minimal: dropped)
+      outQueue = [];
+    };
+    ws.onclose = () => {
+      if (mySession !== session) return; // stale
+      setStatus(false, "disconnected");
+      stopMic();
+      setTimeout(connect, 2000); // auto-reconnect, keeps app running "all time"
+    };
+    ws.onerror = () => setStatus(false, "error", "warn");
+    ws.onmessage = (ev) => {
+      if (mySession !== session) return;
+      if (ev.data instanceof ArrayBuffer) {
+        receiveAudioBlock(new Uint8Array(ev.data));
+      } else {
+        receiveTextFrame(ev.data);
+      }
+    };
+  }
+
+  // ---- audio out (headset) ---------------------------------------------
+  function receiveAudioBlock(u8) {
+    if (!speakerOn) return;
+    const mySession = session;
+    // Play via AudioContext: convert S16 PCM to float at the right rate.
+    const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const frames = Math.floor(u8.byteLength / 2);
+    const buf = audioCtx.createBuffer(1, Math.max(frames, 1), pcm.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < frames; i++) data[i] = view.getInt16(i * 2, true) / 32768;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    if (audioCtx.state === "suspended") {
+      pending.get(mySession).push(src);
+      if (!pendingSession) pendingSession = mySession;
+    } else {
+      src.start();
+    }
+  }
+
+  // Speaker must be started by a user gesture (autoplay policy).
+  speakerBtn.addEventListener("click", async () => {
+    speakerOn = !speakerOn;
+    speakerBtn.classList.toggle("off", !speakerOn);
+    speakerBtn.innerHTML = speakerOn ? "&#128266; Speaker on" : "&#128266; Speaker off";
+    if (speakerOn) {
+      if (audioCtx.state === "suspended") {
+        try { await audioCtx.resume(); flushPending(session); } catch (e) {}
+      }
+    }
+  });
+
+  function flushPending(s) {
+    const q = pending.get(s);
+    if (!q) return;
+    pending.set(s, []);
+    for (const src of q) { try { src.start(); } catch (e) {} }
+  }
+
+  // ---- audio in (microphone) --------------------------------------------
+  // The server's realtime transcription API expects raw 16-bit PCM mono at
+  // 16 kHz. MediaRecorder only produces compressed containers (webm/opus),
+  // so we capture with a ScriptProcessorNode, downmix to mono, resample to
+  // pcm.sampleRate and send raw PCM blocks every ~250 ms.
+  async function startMic() {
+    if (micProcessor) return;
+    if (!stream) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        setStatus(true, "mic denied", "warn");
+        return;
+      }
+    }
+
+    const source = audioCtx.createMediaStreamSource(stream);
+    const blockSamples = Math.floor(pcm.sampleRate * 250 / 1000); // 250 ms
+    micProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+    let acc = new Float32Array(0);
+    micProcessor.onaudioprocess = (ev) => {
+      const input = ev.inputBuffer.getChannelData(0); // mono capture
+      const ratio = audioCtx.sampleRate / pcm.sampleRate;
+      const nOut = Math.max(1, Math.floor(input.length / ratio));
+      const res = new Float32Array(nOut);
+      for (let i = 0; i < nOut; i++) {
+        const pos = i * ratio;
+        const i0 = Math.floor(pos);
+        const frac = pos - i0;
+        const i1 = Math.min(i0 + 1, input.length - 1);
+        res[i] = input[i0] * (1 - frac) + input[i1] * frac;
+      }
+      const merged = new Float32Array(acc.length + res.length);
+      merged.set(acc); merged.set(res, acc.length);
+      acc = merged;
+
+      while (acc.length >= blockSamples) {
+        const block = acc.subarray(0, blockSamples);
+        const buf = new DataView(new ArrayBuffer(blockSamples * 2));
+        for (let i = 0; i < blockSamples; i++) {
+          const s = Math.max(-1, Math.min(1, block[i]));
+          buf.setInt16(i * 2, s < 0 ? s * 32768 : s * 32767, true);
+        }
+        if (ws && ws.readyState === 1 && !locked) ws.send(buf.buffer);
+        acc = acc.subarray(blockSamples);
+      }
+    };
+    source.connect(micProcessor);
+    micProcessor.connect(audioCtx.destination); // needed to drive the node
+  }
+
+  function stopMic() {
+    if (micProcessor) {
+      try { micProcessor.disconnect(); } catch (e) {}
+      micProcessor = null;
+    }
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+  }
+
+  micBtn.addEventListener("click", () => {
+    micActive = !micActive;
+    micBtn.classList.toggle("off", !micActive);
+    micBtn.innerHTML = micActive ? "&#127908; Mic live" : "&#127908; Hold to talk";
+    if (micActive && !locked) startMic();
+    if (!micActive) stopMic();
+  });
+
+  // ---- text ------------------------------------------------------------
+  function addMessage(tag, text, opts) {
+    const div = document.createElement("div");
+    div.className = "msg";
+    div.tabIndex = 0;
+    const row = document.createElement("div");
+    row.className = "row";
+    const t = document.createElement("span");
+    t.className = "tag";
+    t.textContent = tag;
+    const actions = document.createElement("span");
+    actions.className = "actions";
+    const btn = document.createElement("button");
+    btn.textContent = "Copy";
+    btn.addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(text); }
+      catch (e) { fallbackCopy(text); }
+      btn.textContent = "Copied";
+      setTimeout(() => (btn.textContent = "Copy"), 1500);
+    });
+    actions.appendChild(btn);
+    row.append(t, actions);
+    const body = document.createElement("div");
+    body.textContent = text;
+    div.append(row, body);
+    logEl.appendChild(div);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function fallbackCopy(text) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    ta.remove();
+  }
+
+  function receiveTextFrame(raw) {
+    let tag = "server";
+    let text = raw;
+    try {
+      const msg = JSON.parse(raw);
+      if (typeof msg === "object" && msg !== null && typeof msg.text === "string") {
+        text = msg.text;
+        if (typeof msg.tag === "string") tag = msg.tag;
+      }
+    } catch (e) { /* plain text */ }
+    addMessage(tag, text);
+  }
+
+  async function sendText() {
+    const text = textInput.value.trim();
+    if (!text) return;
+    if (ws && ws.readyState === 1 && !locked) {
+      ws.send(JSON.stringify({ type: "text", text: text }));
+      textInput.value = "";
+    } else if (locked) {
+      banner.textContent = "Cannot send while phone is locked.";
+      setTimeout(() => (banner.textContent = "Sending paused \u2014 phone locked. Received text is kept."), 2000);
+    }
+  }
+  sendBtn.addEventListener("click", sendText);
+  textInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText(); }
+  });
+
+  // ---- start ------------------------------------------------------------
+  connect();
+  updateLockState();
+})();
+</script>
+</body>
+</html>
