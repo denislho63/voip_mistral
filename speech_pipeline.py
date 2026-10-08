@@ -16,15 +16,19 @@ is disabled and the server keeps running (audio is dropped with a warning).
 
 from __future__ import annotations
 
+import array
 import asyncio
 import io
 import logging
 import os
-import struct
+import sys
 import wave
+from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 
 from process_text import processText
+
+ROOT = Path(__file__).resolve().parent
 
 log = logging.getLogger("phone-stream.speech")
 
@@ -54,12 +58,28 @@ SAMPLE_RATE = 16000
 LANGUAGE = "fr"
 
 # Custom vocabulary applied to the batch (second) transcription pass.
-CUSTOM_VOCABULARY = [
-    "AIForMe",
-    "Lhospitalier",
-    "acronyme",
-    "Marthuret",
-]
+# By default it is loaded from custom_vocabulary.txt (one term per line,
+# '#' starts a comment); set PHONE_STREAM_VACABULARY to point to another
+# file, or PHONE_STREAM_VOCABULARY to an inline comma-separated list.
+VOCABULARY_FILE = ROOT / "custom_vocabulary.txt"
+
+
+def _load_custom_vocabulary() -> list[str]:
+    inline = os.environ.get("PHONE_STREAM_VOCABULARY", "").strip()
+    if inline:
+        return [t.strip() for t in inline.split(",") if t.strip()]
+    path = Path(os.environ.get("PHONE_STREAM_VACABULARY", VOCABULARY_FILE))
+    if not path.is_file():
+        return []
+    terms = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        term = line.split("#", 1)[0].strip()
+        if term:
+            terms.append(term)
+    return terms
+
+
+CUSTOM_VOCABULARY = _load_custom_vocabulary()
 
 OnText = Callable[[str, str], Awaitable[None]]
 OnAudio = Callable[[bytes], Awaitable[None]]
@@ -83,22 +103,38 @@ def _extract_tts_audio(response) -> bytes:
 
 
 def _resample_pcm_s16le(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
-    """Linearly resample 16-bit mono PCM between rates (stdlib only)."""
+    """Linearly resample 16-bit mono PCM between rates (stdlib only).
+
+    Bulk-unpacks the samples with array and repacks the result in one
+    shot, which is dramatically faster than a per-sample to_bytes() loop
+    for the phrase-length buffers produced by the TTS pass.
+    """
     if not pcm or src_rate == dst_rate:
         return pcm
-    samples = struct.unpack(f"<{len(pcm) // 2}h", pcm[: len(pcm) // 2 * 2])
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    if sys.byteorder == "big":
+        samples.byteswap()
     n_src = len(samples)
     if n_src == 0:
         return b""
     n_dst = int(n_src * dst_rate / src_rate)
-    out = bytearray()
-    for i in range(n_dst):
-        pos = i * (n_src - 1) / max(n_dst - 1, 1)
-        i0 = int(pos)
-        i1 = min(i0 + 1, n_src - 1)
-        frac = pos - i0
-        out += int(samples[i0] * (1 - frac) + samples[i1] * frac).to_bytes(2, "little", signed=True)
-    return bytes(out)
+    if n_dst == 0:
+        return b""
+    if n_dst == 1:
+        out = array.array("h", [samples[0]])
+    else:
+        out = array.array("h", bytes(2 * n_dst))
+        step = (n_src - 1) / (n_dst - 1)
+        for i in range(n_dst):
+            pos = i * step
+            i0 = int(pos)
+            i1 = min(i0 + 1, n_src - 1)
+            frac = pos - i0
+            out[i] = int(samples[i0] * (1.0 - frac) + samples[i1] * frac)
+    if sys.byteorder == "big":
+        out.byteswap()
+    return out.tobytes()
 
 
 def pipeline_available() -> bool:
@@ -115,18 +151,28 @@ def _convert_tts_to_pcm_s16le(raw: bytes, src_rate: int, dst_rate: int) -> bytes
     n = len(raw) // 4
     if n == 0:
         return b""
-    floats = struct.unpack(f"<{n}f", raw[: n * 4])
+    floats = array.array("f")
+    floats.frombytes(raw[: n * 4])
+    if sys.byteorder == "big":
+        floats.byteswap()
     n_dst = int(n * dst_rate / src_rate)
-    out = bytearray()
-    for i in range(n_dst):
-        pos = i * (n - 1) / max(n_dst - 1, 1)
-        i0 = int(pos)
-        i1 = min(i0 + 1, n - 1)
-        frac = pos - i0
-        value = floats[i0] * (1 - frac) + floats[i1] * frac
-        clamped = max(-1.0, min(1.0, value))
-        out += int(clamped * 32767).to_bytes(2, "little", signed=True)
-    return bytes(out)
+    if n_dst == 0:
+        return b""
+    out = array.array("h", bytes(2 * n_dst))
+    if n_dst == 1:
+        out[0] = int(max(-1.0, min(1.0, floats[0])) * 32767)
+    else:
+        step = (n - 1) / (n_dst - 1)
+        for i in range(n_dst):
+            pos = i * step
+            i0 = int(pos)
+            i1 = min(i0 + 1, n - 1)
+            frac = pos - i0
+            value = floats[i0] * (1.0 - frac) + floats[i1] * frac
+            out[i] = int(max(-1.0, min(1.0, value)) * 32767)
+    if sys.byteorder == "big":
+        out.byteswap()
+    return out.tobytes()
 
 
 def tts_pcm(client, text: str) -> bytes:

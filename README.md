@@ -45,7 +45,10 @@ export MISTRAL_API_KEY=...        # Windows: set MISTRAL_API_KEY=...
 Without `mistralai` or `MISTRAL_API_KEY` the server still runs and serves
 the app; audio blocks are dropped and a warning is logged.
 
-The custom vocabulary lives in `speech_pipeline.py` (`CUSTOM_VOCABULARY`).
+The custom vocabulary lives in `custom_vocabulary.txt` (one term per line,
+`#` starts a comment). Override the file path with
+`PHONE_STREAM_VACABULARY=/path/to/file`, or pass an inline list with
+`PHONE_STREAM_VOCABULARY=term1,term2`.
 API keys must come from the environment — never hard-code them.
 
 ### processText() and process_command() hooks
@@ -119,6 +122,18 @@ tap on the app (browser autoplay/permission policies).
 
 ## Security
 
-TLS 1.2+ with certificate in `certs/`. For production, replace the
-self-signed certificate with one from a real CA (e.g. Let's Encrypt) and
-serve behind your domain.
+- **TLS only**: the server has no plaintext port; both the app and the
+  WebSocket must be loaded over https/wss (TLS 1.2+), certificate in
+  `certs/`. For production, replace the self-signed certificate with one
+  from a real CA (e.g. Let's Encrypt) and serve behind your domain.
+- **Access token**: every request (static page and WebSocket handshake)
+  must present the access token, either as a `?token=` query parameter or
+  an `Authorization: Bearer <token>` header. Without it the server answers
+  401. Set the token via:
+  ```bash
+  export PHONE_STREAM_TOKEN=...   # Windows: set PHONE_STREAM_TOKEN=...
+  ```
+  If unset, the server generates a random token at startup and logs the
+  ready-to-open app URL (`https://<ip>:<port>/?token=...`). The phone
+  client reads the token from the page URL and forwards it to the
+  WebSocket automatically.

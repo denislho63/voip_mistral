@@ -14,28 +14,36 @@ Server -> Client (binary) : raw audio blocks, played on the headset
 Server -> Client (text)   : JSON  {"type": "text", "text": "..."} shown to
                             the user (selectable, copyable to clipboard)
 
-Four functions are declared but NOT implemented yet, as required:
+The four required functions are implemented and wired into the frame
+routing:
     processReceivedAudioBlock()
     sendAudioBlock()
     processReceivedTextBlock()
     sendTextBlock()
 
-They are async stubs raising NotImplementedError. The surrounding plumbing
-(TLS, static serving, connection handling, frame routing) is complete and
-calls these stubs, so implementing them later plugs the real media/text
-logic into an already working server.
+Authentication: every request (static page and WebSocket handshake) must
+present the access token, either as a `?token=` query parameter or as an
+`Authorization: Bearer <token>` header. The token comes from the
+PHONE_STREAM_TOKEN environment variable; if unset, a random token is
+generated at startup and logged. The server only ever listens on TLS
+(wss/https); plaintext access is impossible by design.
 """
 
 from __future__ import annotations
 
 import asyncio
+import html
 import io
 import json
 import logging
 import mimetypes
+import os
+import secrets
 import ssl
 import sys
+import urllib.parse
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 
 # Windows: the default Proactor event loop raises spurious errors like
@@ -89,7 +97,33 @@ mimetypes.add_type("image/svg+xml", ".svg")
 # Audio/text pipeline state (per connection)
 # --------------------------------------------------------------------------
 
-PIPELINES: dict[ServerConnection, "SpeechPipeline"] = {}
+
+@dataclass
+class ClientSession:
+    """Per-connection state: the client's socket and its speech pipeline.
+
+    Created by phone_connection() and passed explicitly to the four
+    audio/text hooks, instead of a module-level registry keyed by
+    connection object.
+    """
+
+    connection: ServerConnection
+    pipeline: "SpeechPipeline | None" = None
+
+ACCESS_TOKEN = os.environ.get("PHONE_STREAM_TOKEN") or secrets.token_urlsafe(24)
+
+
+def _token_ok(request: Request) -> bool:
+    """Validate the access token from the query string or Bearer header."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        presented = auth[len("Bearer "):].strip()
+    else:
+        presented = ""
+    if not presented:
+        parsed = urllib.parse.urlsplit(request.path)
+        presented = urllib.parse.parse_qs(parsed.query).get("token", [""])[0]
+    return secrets.compare_digest(presented, ACCESS_TOKEN)
 
 
 def _wav_bytes(pcm: bytes) -> bytes:
@@ -113,7 +147,7 @@ def _sanitize_pcm(block: bytes) -> bytes:
 # --------------------------------------------------------------------------
 
 async def processReceivedAudioBlock(
-    connection: ServerConnection, audio_block: bytes
+    session: ClientSession, audio_block: bytes
 ) -> None:
     """Handle one binary audio block received from a client microphone.
 
@@ -126,28 +160,29 @@ async def processReceivedAudioBlock(
     if not pcm:
         return
 
-    pipeline = PIPELINES.get(connection)
+    pipeline = session.pipeline
     if pipeline is None:
-        log.debug("no pipeline for %s; dropping audio block", connection.remote_address)
+        log.debug(
+            "no pipeline for %s; dropping audio block",
+            session.connection.remote_address,
+        )
         return
     await pipeline.feed(pcm)
 
 
-async def sendAudioBlock(connection: ServerConnection, audio_block: bytes) -> None:
+async def sendAudioBlock(session: ClientSession, audio_block: bytes) -> None:
     """Send one binary audio block to a client's headset.
 
     Designated outbound-audio hook. Serializes sends per connection and
     closes the connection if the client is gone.
     """
     try:
-        await connection.send(audio_block)
+        await session.connection.send(audio_block)
     except ConnectionClosed:
-        log.debug("sendAudioBlock: client %s gone", connection.remote_address)
+        log.debug("sendAudioBlock: client %s gone", session.connection.remote_address)
 
 
-async def processReceivedTextBlock(
-    connection: ServerConnection, text: str
-) -> None:
+async def processReceivedTextBlock(session: ClientSession, text: str) -> None:
     """Handle one text block received from a client.
 
     Called automatically by the connection handler for every text frame.
@@ -157,33 +192,34 @@ async def processReceivedTextBlock(
     """
     response_text = process_command(text)
     if response_text:
-        await sendTextBlock(connection, response_text)
+        await sendTextBlock(session, response_text)
 
-    pipeline = PIPELINES.get(connection)
+    pipeline = session.pipeline
     if pipeline is not None and response_text:
         pcm = await pipeline.synthesize(response_text)
         if pcm:
-            await sendAudioBlock(connection, pcm)
+            await sendAudioBlock(session, pcm)
 
 
-async def sendTextBlock(connection: ServerConnection, text: str) -> None:
+async def sendTextBlock(session: ClientSession, text: str) -> None:
     """Send one text block to a client for display (selectable/copyable).
 
     Serializes sends per connection and closes the connection if the
     client is gone.
     """
     try:
-        await connection.send(json.dumps({"type": "text", "text": text}))
+        await session.connection.send(json.dumps({"type": "text", "text": text}))
     except ConnectionClosed:
-        log.debug("sendTextBlock: client %s gone", connection.remote_address)
+        log.debug("sendTextBlock: client %s gone", session.connection.remote_address)
 
 
 # --------------------------------------------------------------------------
 # Pipeline lifecycle — bound to the connection handler
 # --------------------------------------------------------------------------
 
-async def start_pipeline(connection: ServerConnection) -> None:
+async def start_pipeline(session: ClientSession) -> None:
     """Create the speech pipeline for a new client, if the environment allows."""
+    connection = session.connection
     if not pipeline_available():
         if connection.remote_address:
             log.info(
@@ -199,25 +235,26 @@ async def start_pipeline(connection: ServerConnection) -> None:
         await sendAudioBlock(connection, pcm)
 
     try:
-        PIPELINES[connection] = SpeechPipeline(on_text, on_audio)
+        session.pipeline = SpeechPipeline(on_text, on_audio)
         log.info("speech pipeline started for %s", connection.remote_address)
     except Exception as exc:
         log.error("failed to start speech pipeline: %s", exc)
 
 
-async def stop_pipeline(connection: ServerConnection) -> None:
+async def stop_pipeline(session: ClientSession) -> None:
     """Stop and discard the pipeline of a disconnecting client."""
-    pipeline = PIPELINES.pop(connection, None)
+    pipeline = session.pipeline
+    session.pipeline = None
     if pipeline is not None:
         await pipeline.stop()
-        log.info("speech pipeline stopped for %s", connection.remote_address)
+        log.info("speech pipeline stopped for %s", session.connection.remote_address)
 
 
 # --------------------------------------------------------------------------
 # Frame routing
 # --------------------------------------------------------------------------
 
-async def handle_text_frame(connection: ServerConnection, raw: str) -> None:
+async def handle_text_frame(session: ClientSession, raw: str) -> None:
     """Decode/validate a text frame, then dispatch to the hook."""
     text: str | None
     try:
@@ -234,29 +271,31 @@ async def handle_text_frame(connection: ServerConnection, raw: str) -> None:
         return
 
     if len(text) > MAX_TEXT_LEN:
-        log.warning("oversized text frame from %s, rejecting", connection.remote_address)
-        await connection.close(1009, "text message too long")
+        log.warning(
+            "oversized text frame from %s, rejecting", session.connection.remote_address
+        )
+        await session.connection.close(1009, "text message too long")
         return
 
     try:
-        await processReceivedTextBlock(connection, text)
+        await processReceivedTextBlock(session, text)
     except NotImplementedError:
         log.info(
             "processReceivedTextBlock() not implemented; got %d chars from %s",
             len(text),
-            connection.remote_address,
+            session.connection.remote_address,
         )
 
 
-async def handle_binary_frame(connection: ServerConnection, data: bytes) -> None:
+async def handle_binary_frame(session: ClientSession, data: bytes) -> None:
     """Dispatch a binary (audio) frame to the hook."""
     try:
-        await processReceivedAudioBlock(connection, data)
+        await processReceivedAudioBlock(session, data)
     except NotImplementedError:
         log.debug(
             "processReceivedAudioBlock() not implemented; dropped %d bytes from %s",
             len(data),
-            connection.remote_address,
+            session.connection.remote_address,
         )
 
 
@@ -268,17 +307,19 @@ async def phone_connection(connection: ServerConnection) -> None:
     """Lifecycle for one phone client."""
     remote = connection.remote_address
     log.info("client connected: %s", remote)
-    await start_pipeline(connection)
+
+    session = ClientSession(connection=connection)
+    await start_pipeline(session)
     try:
         async for message in connection:
             if isinstance(message, str):
-                await handle_text_frame(connection, message)
+                await handle_text_frame(session, message)
             else:
-                await handle_binary_frame(connection, message)
+                await handle_binary_frame(session, message)
     except ConnectionClosed:
         pass
     finally:
-        await stop_pipeline(connection)
+        await stop_pipeline(session)
         log.info("client disconnected: %s", remote)
 
 
@@ -300,8 +341,12 @@ def http_response(status: int, reason: str, body: bytes, content_type: str) -> R
     )
 
 
-def serve_static(request: Request) -> Response:
-    """Serve static/index.html (and other static files) for plain HTTPS GETs."""
+async def serve_static(request: Request) -> Response:
+    """Serve static/index.html (and other static files) for plain HTTPS GETs.
+
+    File reads run in a worker thread so large files never block the
+    event loop.
+    """
     resource = request.path.split("?", 1)[0].split("#", 1)[0]
 
     if resource in ("/", "/index.html", "/index.htm"):
@@ -316,20 +361,34 @@ def serve_static(request: Request) -> Response:
         return http_response(404, "Not Found", b"not found", "text/plain")
 
     mime = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-    return http_response(200, "OK", file.read_bytes(), mime)
+    body = await asyncio.to_thread(file.read_bytes)
+    return http_response(200, "OK", body, mime)
 
 
-def process_request(
+async def process_request(
     connection: ServerConnection, request: Request
 ) -> Response | None:
-    """Route non-WebSocket requests to the static server.
+    """Authenticate the request, then route non-WebSocket requests to the
+    static server.
 
     Returning None lets the WebSocket handshake proceed; returning a
-    Response serves it as a plain HTTPS request.
+    Response serves it as a plain HTTPS request. Every request - static
+    page or WebSocket handshake - must carry the access token (query
+    parameter `token` or `Authorization: Bearer` header). The server
+    only listens on TLS, so plaintext access is impossible by design.
     """
-    if request.headers.get("Upgrade", "").lower() == "websocket":
+    is_websocket = request.headers.get("Upgrade", "").lower() == "websocket"
+    if not _token_ok(request):
+        log.warning(
+            "unauthorized %s request for %s from %s",
+            "websocket" if is_websocket else "https",
+            request.path.split("?", 1)[0],
+            connection.remote_address,
+        )
+        return http_response(401, "Unauthorized", b"unauthorized", "text/plain")
+    if is_websocket:
         return None  # WebSocket upgrade: handled by phone_connection()
-    return serve_static(request)
+    return await serve_static(request)
 
 
 # --------------------------------------------------------------------------
@@ -364,14 +423,16 @@ async def main() -> None:
         ping_timeout=PING_INTERVAL,
         max_queue=None,
     ):
-        log.info(
-            "phone-stream server listening on %s:%d "
-            "(app: https://<your-ip>:%d/  ws: wss://<your-ip>:%d/)",
-            HOST,
-            PORT,
-            PORT,
-            PORT,
-        )
+        scheme_host = f"https://<your-ip>:{PORT}"
+        if os.environ.get("PHONE_STREAM_TOKEN"):
+            log.info("phone-stream server listening on %s:%d (token from PHONE_STREAM_TOKEN)", HOST, PORT)
+        else:
+            log.info(
+                "phone-stream server listening on %s:%d "
+                "(random access token for this run)", HOST, PORT
+            )
+        log.info("app:   %s/?token=%s", scheme_host, ACCESS_TOKEN)
+        log.info("ws:    wss://<your-ip>:%d/phone (Authorization: Bearer or ?token=)", PORT)
         await asyncio.get_running_loop().create_future()  # run forever
 
 

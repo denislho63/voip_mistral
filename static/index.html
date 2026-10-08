@@ -95,7 +95,11 @@
 "use strict";
 (() => {
   // ---- configuration -------------------------------------------------
-  const WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/phone";
+  // Access token: taken from the ?token= parameter of the page URL
+  // (the server refuses any request without it). Page and WebSocket must
+  // both be loaded over TLS (https/wss) - the server has no plaintext port.
+  const TOKEN = new URLSearchParams(location.search).get("token") || "";
+  const WS_URL = (location.protocol === "https:" ? "wss://" : "wss://") + location.host + "/phone?token=" + encodeURIComponent(TOKEN);
 
   // ---- elements -------------------------------------------------------
   const dot = document.getElementById("status-dot");
