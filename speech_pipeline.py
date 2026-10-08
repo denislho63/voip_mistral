@@ -106,41 +106,6 @@ def _extract_tts_audio(response) -> bytes:
     return b""
 
 
-def _resample_pcm_s16le(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
-    """Linearly resample 16-bit mono PCM between rates (stdlib only).
-
-    Bulk-unpacks the samples with array and repacks the result in one
-    shot, which is dramatically faster than a per-sample to_bytes() loop
-    for the phrase-length buffers produced by the TTS pass.
-    """
-    if not pcm or src_rate == dst_rate:
-        return pcm
-    samples = array.array("h")
-    samples.frombytes(pcm[: len(pcm) // 2 * 2])
-    if sys.byteorder == "big":
-        samples.byteswap()
-    n_src = len(samples)
-    if n_src == 0:
-        return b""
-    n_dst = int(n_src * dst_rate / src_rate)
-    if n_dst == 0:
-        out = array.array("h", [samples[0]])
-    elif n_dst == 1:
-        out = array.array("h", [samples[-1]])
-    else:
-        out = array.array("h", bytes(2 * n_dst))
-        step = (n_src - 1) / (n_dst - 1)
-        for i in range(n_dst):
-            pos = i * step
-            i0 = int(pos)
-            i1 = min(i0 + 1, n_src - 1)
-            frac = pos - i0
-            out[i] = int(samples[i0] * (1.0 - frac) + samples[i1] * frac)
-    if sys.byteorder == "big":
-        out.byteswap()
-    return out.tobytes()
-
-
 def pipeline_available() -> bool:
     """True if the Mistral pipeline can run (library + API key present)."""
     return MISTRAL_AVAILABLE and bool(os.environ.get("MISTRAL_API_KEY"))
