@@ -68,9 +68,39 @@
   footer {
     flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px;
     padding: 10px 12px; background: var(--panel); border-top: 1px solid var(--line);
+    position: relative;
   }
 
   .composer { display: flex; gap: 8px; }
+  /* 3-level command menu (theme > sub-theme > command) */
+  #menu-btn {
+    flex: 0 0 auto; min-width: 44px; padding: 10px 8px;
+    font-size: 14px; border-radius: 10px; background: var(--panel);
+    border: 1px solid var(--line); color: var(--fg);
+  }
+  #menu-panel {
+    position: absolute; bottom: 100%; left: 0; margin-bottom: 6px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.45);
+    min-width: 220px; max-width: 92vw; max-height: 60vh; overflow-y: auto;
+    padding: 6px; display: none; z-index: 30;
+  }
+  #menu-panel.open { display: block; }
+  .menu-item {
+    display: block; width: 100%; text-align: left;
+    background: none; border: 0; border-radius: 8px;
+    color: var(--fg); font: inherit; font-size: 14px;
+    padding: 9px 12px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .menu-item:hover, .menu-item:active { background: var(--bg); }
+  .menu-item.theme { color: var(--acc); font-weight: 600; }
+  .menu-item.back { color: var(--dim); font-size: 12px; }
+  .menu-item.command { color: var(--fg); }
+  .menu-title {
+    font-size: 10px; letter-spacing: .08em; color: var(--dim);
+    text-transform: uppercase; padding: 6px 12px 2px; user-select: none;
+  }
+  .menu-sep { border-top: 1px solid var(--line); margin: 4px 6px; }
   #text-input {
     flex: 1; background: var(--bg); color: var(--fg);
     border: 1px solid var(--line); border-radius: 10px; padding: 10px;
@@ -103,6 +133,8 @@
   <section id="log" aria-label="Received messages"></section>
   <footer>
     <div class="composer">
+      <button id="menu-btn" title="Commands">---</button>
+      <div id="menu-panel"></div>
       <textarea id="text-input" rows="1" placeholder="Type a message to the server&hellip;"></textarea>
       <button id="send-btn">Send</button>
     </div>
@@ -156,6 +188,106 @@
   }
 
   htmlClose.addEventListener("click", () => htmlZone.classList.remove("show"));
+
+  // ---- 3-level command menu (theme > sub-theme > command) ----------
+  // Themes mirror the classification domains (detection_classification.py).
+  // Edit COMMANDS to add/modify entries; a command is sent to the server
+  // as if typed in the composer.
+  const COMMANDS = {
+    "Pastoral": {
+      "Prières": ["Notre Père", "Bénédiction", "Confession"],
+      "Lectures": ["Psaume 23", "Ésaü et Jacob", "Sermon sur la montagne"],
+      "Actions": ["Récite le verset du jour", "Méditation guidée"],
+    },
+    "Théologique": {
+      "Concepts": ["Explique la trinité", "Différence justification/sanctification"],
+      "Histoire": ["Concile de Nicée", "Réforme protestante"],
+    },
+    "Informatique": {
+      "Système": ["État du serveur", "Redémarre le service", "Logs récents"],
+      "Réseau": ["Test de connexion", "Adresse IP locale"],
+    },
+  };
+
+  const menuBtn = document.getElementById("menu-btn");
+  const menuPanel = document.getElementById("menu-panel");
+  let menuPath = []; // e.g. ["Pastoral", "Prières"]
+
+  function closeMenu() {
+    menuPanel.classList.remove("open");
+    menuPath = [];
+  }
+
+  function sendCommand(text) {
+    textInput.value = text;
+    closeMenu();
+    sendText();
+  }
+
+  function renderMenu() {
+    menuPanel.textContent = "";
+    const mk = (cls, label, fn) => {
+      const b = document.createElement("button");
+      b.className = "menu-item " + cls;
+      b.textContent = label;
+      b.addEventListener("click", fn);
+      menuPanel.appendChild(b);
+      return b;
+    };
+    const title = (t) => {
+      const d = document.createElement("div");
+      d.className = "menu-title";
+      d.textContent = t;
+      menuPanel.appendChild(d);
+    };
+    const sep = () => {
+      const d = document.createElement("div");
+      d.className = "menu-sep";
+      menuPanel.appendChild(d);
+    };
+
+    if (menuPath.length === 0) {
+      title("Thèmes");
+      for (const theme of Object.keys(COMMANDS)) {
+        mk("theme", theme, () => { menuPath = [theme]; renderMenu(); });
+      }
+    } else if (menuPath.length === 1) {
+      const theme = menuPath[0];
+      mk("back", "←", () => { menuPath = []; renderMenu(); });
+      title(theme);
+      for (const sub of Object.keys(COMMANDS[theme])) {
+        mk("theme", sub, () => { menuPath = [theme, sub]; renderMenu(); });
+      }
+    } else {
+      const [theme, sub] = menuPath;
+      mk("back", "← " + theme, () => { menuPath = [theme]; renderMenu(); });
+      title(theme + " › " + sub);
+      sep();
+      for (const cmd of COMMANDS[theme][sub]) {
+        mk("command", cmd, () => sendCommand(cmd));
+      }
+    }
+  }
+
+  menuBtn.addEventListener("click", () => {
+    if (menuPanel.classList.contains("open")) {
+      closeMenu();
+    } else {
+      menuPath = [];
+      renderMenu();
+      menuPanel.classList.add("open");
+    }
+  });
+  // close when tapping outside, or on Escape
+  document.addEventListener("click", (e) => {
+    if (menuPanel.classList.contains("open") &&
+        !menuPanel.contains(e.target) && e.target !== menuBtn) {
+      closeMenu();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMenu();
+  });
   const textInput = document.getElementById("text-input");
   const sendBtn = document.getElementById("send-btn");
 
