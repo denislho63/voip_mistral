@@ -101,6 +101,20 @@ conversation (e.g. pass it to an LLM as context).
 - With several phones connected at once, each `client_id` has its own
   isolated history — responses never mix between clients.
 
+### process_interactive() hook (fast path)
+
+`process_interactive(realtime_text, client_id, domain, history)` (in
+`process_interactive.py`) is called right after the **realtime**
+transcription of a finished phrase, before the batch pass:
+
+- returns a **non-empty string** -> that text is sent to the phone
+  immediately (text + speech) and the batch pass is **skipped**;
+- returns an **empty string** -> the pipeline continues as before
+  (batch transcription with the domain vocabulary, then processText()).
+
+Use it for commands and quick reactions that must feel instant and do
+not need the accuracy of the batch pass.
+
 ### processText() and process_command() hooks
 
 `processText(realtime_text, batch_text, client_id, domain, history)`

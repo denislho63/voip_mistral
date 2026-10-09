@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from detection_classification import find_domain, vocabulary_for_domain
+from process_interactive import process_interactive
 from process_text import processText
 
 if TYPE_CHECKING:
@@ -259,14 +260,33 @@ class SpeechPipeline:
             # most fitting vocabulary before the batch (second) pass.
             domain = await self._classify(full_phrase)
             self.last_domain = domain
+            # Record the phrase (realtime text) and get this client's
+            # per-domain history to hand to the hooks as context.
+            history_records = self._record_phrase(domain, full_phrase, "")
+            # Interactive hook: react directly from the realtime text.
+            # Non-empty output is delivered immediately and the batch
+            # pass is skipped; empty output continues the normal flow.
+            interactive_text = process_interactive(
+                full_phrase,
+                client_id=self.client_id,
+                domain=domain,
+                history=history_records,
+            )
+            if interactive_text:
+                self._record_response(domain, interactive_text)
+                log.info(
+                    "process_interactive output (batch skipped): %s", interactive_text
+                )
+                await self.on_text(interactive_text, "interactive")
+                pcm = await self.synthesize(interactive_text)
+                if pcm:
+                    await self.on_audio(pcm)
+                return
+            # Batch (second) pass with the domain vocabulary.
             vocabulary = vocabulary_for_domain(domain)
             batch_text = await self._transcribe_batch(wav_data, vocabulary)
             if batch_text:
                 log.info("phrase (batch pass, domain=%s): %s", domain, batch_text)
-
-            # Record the phrase in the client's per-domain history, then
-            # hand that history to processText() as context.
-            history_records = self._record_phrase(domain, full_phrase, batch_text)
             # User hook: decide what to speak/display from both transcriptions
             spoken_text = processText(
                 full_phrase,
