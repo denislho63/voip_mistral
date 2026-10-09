@@ -22,7 +22,21 @@
     padding: 10px 14px; background: var(--panel);
     border-bottom: 1px solid var(--line); flex: 0 0 auto;
   }
-  header h1 { font-size: 16px; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  header h1 { font-size: 16px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .controls { display: flex; gap: 8px; margin-left: auto; }
+  .controls button { flex: 0 0 auto; white-space: nowrap; }
+  /* HTML zone: renders server responses that are HTML */
+  #html-zone {
+    flex: 0 0 auto; max-height: 45%; overflow-y: auto;
+    padding: 12px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    display: none;
+  }
+  #html-zone.show { display: block; }
+  #html-zone .zone-label { font-size: 10px; letter-spacing: .08em; color: var(--dim); text-transform: uppercase; margin-bottom: 6px; display: flex; align-items: center; }
+  #html-zone .zone-label button { margin-left: auto; }
+  #html-content { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; overflow-x: auto; }
+  #html-content :where(img, video, svg, table, pre) { max-width: 100%; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--err); flex: 0 0 auto; }
   .dot.ok { background: var(--ok); }
   .dot.warn { background: var(--warn); }
@@ -55,8 +69,7 @@
     flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px;
     padding: 10px 12px; background: var(--panel); border-top: 1px solid var(--line);
   }
-  .controls { display: flex; gap: 8px; align-items: center; }
-  .controls button { flex: 1; padding: 10px; font-size: 14px; border-radius: 10px; }
+
   .composer { display: flex; gap: 8px; }
   #text-input {
     flex: 1; background: var(--bg); color: var(--fg);
@@ -76,15 +89,19 @@
   <div class="dot" id="status-dot"></div>
   <h1>Phone Stream</h1>
   <div class="status" id="status-text">disconnected</div>
+  <div class="controls">
+    <button id="mic-btn" class="off">&#127908; Mic live</button>
+    <button id="speaker-btn" class="off">&#128266; Speaker off</button>
+  </div>
 </header>
 <div id="banner">Sending paused &mdash; phone locked. Received text is kept.</div>
 <main>
-  <div id="log"></div>
+  <section id="html-zone" aria-label="HTML content from the server">
+    <div class="zone-label"><span>HTML</span><button id="html-close" class="ghost" title="Close">&#10005;</button></div>
+    <div id="html-content"></div>
+  </section>
+  <section id="log" aria-label="Received messages"></section>
   <footer>
-    <div class="controls">
-      <button id="mic-btn" class="off">&#127908; Hold to talk</button>
-      <button id="speaker-btn" class="off">&#128266; Speaker off</button>
-    </div>
     <div class="composer">
       <textarea id="text-input" rows="1" placeholder="Type a message to the server&hellip;"></textarea>
       <button id="send-btn">Send</button>
@@ -120,6 +137,25 @@
   const logEl = document.getElementById("log");
   const micBtn = document.getElementById("mic-btn");
   const speakerBtn = document.getElementById("speaker-btn");
+  const htmlZone = document.getElementById("html-zone");
+  const htmlContent = document.getElementById("html-content");
+  const htmlClose = document.getElementById("html-close");
+
+  // Heuristic: a response is treated as HTML when it starts with a tag
+  // or the server tagged it "html".
+  function looksLikeHtml(text, tag) {
+    if (tag === "html") return true;
+    const t = text.trim();
+    return t.startsWith("<") && /<\/[a-zA-Z][^>]*>/.test(t);
+  }
+
+  function showHtml(text) {
+    htmlContent.innerHTML = text;
+    htmlZone.classList.add("show");
+    htmlZone.scrollTop = 0;
+  }
+
+  htmlClose.addEventListener("click", () => htmlZone.classList.remove("show"));
   const textInput = document.getElementById("text-input");
   const sendBtn = document.getElementById("send-btn");
 
@@ -305,7 +341,7 @@
   micBtn.addEventListener("click", () => {
     micActive = !micActive;
     micBtn.classList.toggle("off", !micActive);
-    micBtn.innerHTML = micActive ? "&#127908; Mic live" : "&#127908; Hold to talk";
+    micBtn.innerHTML = micActive ? "&#127908; Mic live" : "&#127908; Mic off";
     if (micActive && !locked) startMic();
     if (!micActive) stopMic();
   });
@@ -360,6 +396,10 @@
         if (typeof msg.tag === "string") tag = msg.tag;
       }
     } catch (e) { /* plain text */ }
+    if (looksLikeHtml(text, tag)) {
+      showHtml(text);
+      return;
+    }
     addMessage(tag, text);
   }
 
