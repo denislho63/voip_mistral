@@ -115,6 +115,31 @@ transcription of a finished phrase, before the batch pass:
 Use it for commands and quick reactions that must feel instant and do
 not need the accuracy of the batch pass.
 
+**Menu commands**: the spoken phrase is matched (loosely: case, accents
+and punctuation are ignored) against the entries of the phone app's
+command menu (`static/commands.json`, the same file the UI serves).
+On a match, the handler registered in `HANDLERS` is called with the
+three menu levels — `handler(theme, sub_theme, command)` — and its
+return value is spoken/displayed immediately. Unregistered commands
+fall back to `handle_default`, which returns "Fait".
+
+To add a treatment:
+
+1. add the command to `static/commands.json` (it appears in the menu),
+2. in `process_interactive.py`, add a function and one line in `HANDLERS`:
+
+```python
+def server_status(theme, sub_theme, command):
+    return "Le serveur tourne depuis 3 jours."
+
+HANDLERS = {
+    "État du serveur": server_status,
+}
+```
+
+Nothing else to touch — recognition, menu display, and dispatch are
+automatic.
+
 ### processText() and process_command() hooks
 
 `processText(realtime_text, batch_text, client_id, domain, history)`
