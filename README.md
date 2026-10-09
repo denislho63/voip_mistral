@@ -132,6 +132,7 @@ To add a treatment:
 def server_status(theme, sub_theme, command):
     return "Le serveur tourne depuis 3 jours."
 
+
 HANDLERS = {
     "État du serveur": server_status,
 }
