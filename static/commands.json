@@ -1,0 +1,15 @@
+{
+  "Pastoral": {
+    "Prières": ["Notre Père", "Bénédiction", "Confession"],
+    "Lectures": ["Psaume 23", "Ésaü et Jacob", "Sermon sur la montagne"],
+    "Actions": ["Récite le verset du jour", "Méditation guidée"]
+  },
+  "Théologique": {
+    "Concepts": ["Explique la trinité", "Différence justification/sanctification"],
+    "Histoire": ["Concile de Nicée", "Réforme protestante"]
+  },
+  "Informatique": {
+    "Système": ["État du serveur", "Redémarre le service", "Logs récents"],
+    "Réseau": ["Test de connexion", "Adresse IP locale"]
+  }
+}

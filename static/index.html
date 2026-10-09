@@ -191,8 +191,9 @@
 
   // ---- 3-level command menu (theme > sub-theme > command) ----------
   // Themes mirror the classification domains (detection_classification.py).
-  // Edit COMMANDS to add/modify entries; a command is sent to the server
-  // as if typed in the composer.
+  // The menu content is loaded from the server's /commands.json (edit
+  // static/commands.json); COMMANDS below is only the fallback when the
+  // endpoint is missing or invalid.
   const COMMANDS = {
     "Pastoral": {
       "Prières": ["Notre Père", "Bénédiction", "Confession"],
@@ -213,6 +214,24 @@
   const menuPanel = document.getElementById("menu-panel");
   let menuPath = []; // e.g. ["Pastoral", "Prières"]
 
+  // Load the server-side command tree; merge it over the fallback.
+  async function loadCommands() {
+    try {
+      const url = "commands.json?token=" + encodeURIComponent(TOKEN);
+      const resp = await fetch(url, { cache: "no-store" });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data && typeof data === "object") {
+        for (const theme of Object.keys(data)) {
+          if (data[theme] && typeof data[theme] === "object") {
+            COMMANDS[theme] = data[theme];
+          }
+        }
+      }
+    } catch (e) { /* keep fallback */ }
+  }
+  loadCommands();
+
   function closeMenu() {
     menuPanel.classList.remove("open");
     menuPath = [];
@@ -230,7 +249,10 @@
       const b = document.createElement("button");
       b.className = "menu-item " + cls;
       b.textContent = label;
-      b.addEventListener("click", fn);
+      // stopPropagation: the click would otherwise bubble to the
+      // document-level "tap outside" handler after renderMenu() has
+      // detached this button, closing the freshly opened level.
+      b.addEventListener("click", (ev) => { ev.stopPropagation(); fn(); });
       menuPanel.appendChild(b);
       return b;
     };
