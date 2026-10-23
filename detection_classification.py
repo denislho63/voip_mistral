@@ -74,11 +74,79 @@ _SYSTEM_PROMPT = (
     + ". Réponds uniquement avec le nom du domaine, sans explication."
 )
 
+# Cache des vocabulaires chargés en mémoire (domain -> list[str])
+_VOCABULARY_CACHE: dict[str, list[str]] = {}
+
 
 def _strip_accents(text: str) -> str:
     """Lowercase and remove accents (NFD decomposition, ASCII only)."""
     normalized = unicodedata.normalize("NFD", text)
     return "".join(ch for ch in normalized if not unicodedata.combining(ch)).lower()
+
+
+def _read_vocabulary_file(path: Path) -> list[str]:
+    """Lit un fichier de vocabulaire et retourne la liste des termes."""
+    terms: list[str] = []
+    if not path.is_file():
+        return terms
+    for line in path.read_text(encoding="utf-8").splitlines():
+        term = line.split("#", 1)[0].strip()
+        if term:
+            terms.append(term)
+    return terms
+
+
+def _slug(domain: str) -> str:
+    """Filesystem-safe ASCII name for a domain label."""
+    slug = _strip_accents(domain).strip()
+    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")
+    return slug or "general"
+
+
+def _load_all_vocabularies() -> None:
+    """Charge tous les vocabulaires disponibles en mémoire au démarrage.
+    
+    Parcourt le dossier vocabularies/ et charge chaque fichier .txt.
+    Pour chaque fichier, essaye de trouver le domaine correspondant (par nom
+    de fichier ou slug) et le stocke dans _VOCABULARY_CACHE.
+    """
+    if not VOCABULARY_DIR.is_dir():
+        log.debug("vocabulary directory %s does not exist, skipping preload", VOCABULARY_DIR)
+        return
+    
+    loaded_count = 0
+    for vocab_file in VOCABULARY_DIR.glob("*.txt"):
+        terms = _read_vocabulary_file(vocab_file)
+        if not terms:
+            continue
+        
+        # Essayer de trouver le domaine correspondant à ce fichier
+        # 1. Nom du fichier sans .txt
+        stem = vocab_file.stem
+        
+        # 2. Trouver quel domaine correspond à ce stem
+        domain_found = None
+        for domain in DOMAINS:
+            if stem == domain or stem == _slug(domain):
+                domain_found = domain
+                break
+        
+        # 3. Si aucun domaine trouvé, utiliser le stem comme clé
+        if domain_found is None:
+            domain_found = stem
+        
+        # Stocker dans le cache
+        if domain_found not in _VOCABULARY_CACHE:
+            _VOCABULARY_CACHE[domain_found] = terms
+            loaded_count += 1
+            log.info("preloaded vocabulary for domain %s (%d terms)", domain_found, len(terms))
+    
+    if loaded_count == 0:
+        log.debug("no vocabulary files found in %s", VOCABULARY_DIR)
+
+
+# Charger tous les vocabulaires au démarrage du module
+_load_all_vocabularies()
 
 
 def _normalize_domain(raw: str) -> str:
@@ -184,24 +252,6 @@ def _get_client():
     return Mistral(api_key=api_key)
 
 
-def _read_vocabulary_file(path: Path) -> list[str]:
-    terms: list[str] = []
-    if not path.is_file():
-        return terms
-    for line in path.read_text(encoding="utf-8").splitlines():
-        term = line.split("#", 1)[0].strip()
-        if term:
-            terms.append(term)
-    return terms
-
-
-def _slug(domain: str) -> str:
-    """Filesystem-safe ASCII name for a domain label."""
-    slug = _strip_accents(domain).strip()
-    slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")
-    return slug or "general"
-
-
 def vocabulary_for_domain(domain: str) -> list[str]:
     """Return the custom vocabulary suited to a domain.
 
@@ -209,13 +259,40 @@ def vocabulary_for_domain(domain: str) -> list[str]:
     vocabularies/<domain>.txt (e.g. "automatisation de la maison" ->
     automatisation_de_la_maison.txt).
 
+    Vocabularies are preloaded at module startup into _VOCABULARY_CACHE.
+    If a vocabulary is not in cache (e.g., new file added at runtime),
+    it will be loaded on-demand and cached for future calls.
+
     Empty vocabulary disables the context_bias for the batch pass.
     """
+    # 1. Vérifier le cache d'abord
+    if domain in _VOCABULARY_CACHE:
+        return _VOCABULARY_CACHE[domain]
+    
+    # 2. Essayer de charger à la demande (fallback pour les vocabulaires ajoutés à chaud)
+    terms = []
     for candidate in (
         VOCABULARY_DIR / f"{_slug(domain)}.txt",
         VOCABULARY_DIR / f"{domain}.txt",
     ):
         terms = _read_vocabulary_file(candidate)
         if terms:
+            # Mettre en cache pour les appels futurs
+            _VOCABULARY_CACHE[domain] = terms
+            log.info("lazy-loaded vocabulary for domain %s (%d terms)", domain, len(terms))
             return terms
+    
+    # 3. Aucun vocabulaire trouvé
     return []
+
+
+def reload_vocabularies() -> None:
+    """Recharge tous les vocabulaires depuis le disque.
+    
+    Utile si des fichiers ont été modifiés ou ajoutés pendant l'exécution.
+    Efface le cache actuel et recharge tout.
+    """
+    global _VOCABULARY_CACHE
+    _VOCABULARY_CACHE = {}
+    _load_all_vocabularies()
+    log.info("vocabularies reloaded")
