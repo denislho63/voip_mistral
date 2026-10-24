@@ -1,0 +1,14 @@
+# Pour garder le raisonnement : retirer reasoning_effort="none"
+# et parser le résultat
+#from mistralai.client.models import TextChunk, ThinkChunk
+#content = response.choices[0].message.content
+#thinking, answer = "", ""
+#if isinstance(content, str):
+#    answer = content
+#else:
+#    for chunk in content:
+#        if isinstance(chunk, ThinkChunk):
+#            for inner in chunk.thinking:
+#                thinking += inner.text
+#        elif isinstance(chunk, TextChunk):
+#            answer += chunk.text

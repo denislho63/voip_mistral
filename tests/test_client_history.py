@@ -12,8 +12,8 @@ import sys
 
 import client_history as ch
 from client_history import ClientHistory, HistoryRegistry, new_client_id
-from process_command import process_command
-from process_text import processText
+from process.process_command import process_command
+from process.process_text import processText
 
 sys.path.insert(0, ".")
 

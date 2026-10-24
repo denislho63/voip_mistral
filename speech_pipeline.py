@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from detection_classification import find_domain, vocabulary_for_domain
-from process_interactive import process_interactive
-from process_text import processText
+from process.process_interactive import process_interactive
+from process.process_text import processText
 
 if TYPE_CHECKING:
     from client_history import ClientHistory
@@ -234,14 +234,23 @@ class SpeechPipeline:
                 model=REALTIME_MODEL,
                 audio_format=self.audio_format,
             ):
+                # Handle known event types
                 if isinstance(event, RealtimeTranscriptionSessionCreated):
                     log.info("realtime transcription session created")
                 elif isinstance(event, TranscriptionStreamTextDelta):
-                    await self._handle_delta(event.text)
+                    # Ensure event.text is a string before processing
+                    text = getattr(event, 'text', None)
+                    if isinstance(text, str):
+                        await self._handle_delta(text)
+                    else:
+                        log.debug("received non-string text delta: %s", type(event))
                 elif isinstance(event, TranscriptionStreamDone):
                     log.info("realtime transcription done")
                 elif isinstance(event, RealtimeTranscriptionError):
                     log.error("realtime transcription error: %s", event)
+                else:
+                    # Ignore unknown event types (e.g., raw lists or other objects)
+                    log.debug("received unknown event type: %s", type(event))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -259,6 +268,14 @@ class SpeechPipeline:
             # Domain classification from the realtime text: pick the
             # most fitting vocabulary before the batch (second) pass.
             domain = await self._classify(full_phrase)
+            
+            # Clear history when domain changes
+            if domain != self.last_domain and self.history is not None:
+                log.info("Domain changed from '%s' to '%s', clearing domain history", self.last_domain, domain)
+                # Clear history for the new domain (start fresh)
+                if domain in self.history._by_domain:
+                    self.history._by_domain[domain].clear()
+            
             self.last_domain = domain
             # Record the phrase (realtime text) and get this client's
             # per-domain history to hand to the hooks as context.
@@ -359,7 +376,12 @@ class SpeechPipeline:
                     language=LANGUAGE,
                     **kwargs,
                 )
-                return response.text.strip()
+                text = getattr(response, 'text', None)
+                if isinstance(text, str):
+                    return text.strip()
+                else:
+                    log.warning("batch transcription returned non-string text: %s", type(text))
+                    return ""
 
             return await asyncio.to_thread(call)
         except Exception as exc:

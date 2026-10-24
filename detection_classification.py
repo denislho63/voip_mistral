@@ -33,7 +33,7 @@ log = logging.getLogger("phone-stream.classification")
 ROOT = Path(__file__).resolve().parent
 
 CLASSIFICATION_MODEL = os.environ.get(
-    "MISTRAL_CLASSIFICATION_MODEL", "mistral-small-latest"
+    "MISTRAL_CLASSIFICATION_MODEL", "mistral-large-4"
 )
 
 DEFAULT_DOMAIN = "general"
@@ -85,14 +85,23 @@ def _strip_accents(text: str) -> str:
 
 
 def _read_vocabulary_file(path: Path) -> list[str]:
-    """Lit un fichier de vocabulaire et retourne la liste des termes."""
+    """Lit un fichier de vocabulaire et retourne la liste des termes.
+    
+    Filtre les termes invalides pour l'API Mistral context_bias:
+    - Les termes ne doivent pas contenir de virgules
+    - Les termes ne doivent pas contenir d'espaces
+    """
     terms: list[str] = []
     if not path.is_file():
         return terms
     for line in path.read_text(encoding="utf-8").splitlines():
         term = line.split("#", 1)[0].strip()
         if term:
-            terms.append(term)
+            # Mistral API: context_bias items must not contain commas or whitespace
+            if "," not in term and " " not in term:
+                terms.append(term)
+            else:
+                log.warning("Skipping invalid vocabulary term '%s' (contains comma or whitespace)", term)
     return terms
 
 
@@ -186,6 +195,10 @@ def find_domain(phrase: str, client=None) -> str:
     try:
         response = _chat_complete(client, messages)
         raw = response.choices[0].message.content
+        # Ensure raw is a string before processing
+        if not isinstance(raw, str):
+            log.warning("classification returned non-string content: %s", type(raw))
+            return DEFAULT_DOMAIN
     except Exception as exc:
         log.warning("domain classification failed (%s); using %s", exc, DEFAULT_DOMAIN)
         return DEFAULT_DOMAIN
@@ -230,12 +243,15 @@ def _chat_complete(client, messages):
             model=CLASSIFICATION_MODEL,
             messages=messages,
             temperature=0.0,
+            top_p=1.0,
             max_tokens=20,
+            reasoning_effort="none",
         )
     return chat(
         model=CLASSIFICATION_MODEL,
         messages=messages,
         temperature=0.0,
+        top_p=1.0,
         max_tokens=20,
     )
 

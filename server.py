@@ -59,7 +59,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
 from client_history import REGISTRY, ClientHistory, new_client_id
-from process_command import process_command
+from process.process_command import process_command
 from speech_pipeline import (
     SAMPLE_RATE,
     SpeechPipeline,
@@ -77,6 +77,14 @@ KEY_FILE = ROOT / "certs" / "key.pem"
 
 HOST = "0.0.0.0"
 PORT = 8443
+
+# List of IP addresses that are allowed to connect without a token
+# Can be configured via PHONE_STREAM_ALLOWED_IPS environment variable
+# (comma-separated list). Default: 77.196.125.100,127.0.0.1
+ALLOWED_IPS_NO_TOKEN = [
+    ip.strip() for ip in os.environ.get("PHONE_STREAM_ALLOWED_IPS", "77.196.125.100,127.0.0.1").split(",")
+    if ip.strip()
+]
 if len(sys.argv) > 1:
     try:
         PORT = int(sys.argv[1])
@@ -118,6 +126,7 @@ class ClientSession:
     client_id: str = ""
     pipeline: SpeechPipeline | None = None
     history: ClientHistory | None = None
+    stop_playback: bool = False
 
 
 ACCESS_TOKEN = os.environ.get("PHONE_STREAM_TOKEN") or secrets.token_urlsafe(24)
@@ -201,6 +210,10 @@ async def sendAudioBlock(session: ClientSession, audio_block: bytes) -> None:
     Designated outbound-audio hook. Serializes sends per connection and
     closes the connection if the client is gone.
     """
+    # Check if playback should be stopped
+    if session.stop_playback:
+        log.debug("sendAudioBlock: playback stopped by user request")
+        return
     try:
         await session.connection.send(audio_block)
     except ConnectionClosed:
@@ -215,6 +228,17 @@ async def processReceivedTextBlock(session: ClientSession, text: str) -> None:
     returned text back to the client (displayed, copyable) plus its
     text-to-speech rendering to the headset when the pipeline is enabled.
     """
+    # Check if user wants to stop playback
+    if text.strip().lower() == "stop":
+        session.stop_playback = True
+        log.info("Playback stopped by user request")
+        # Send a confirmation message
+        await sendTextBlock(session, "Arrêt de la lecture")
+        return
+    
+    # Reset stop flag when new text is received (unless it's "stop" which is handled above)
+    session.stop_playback = False
+    
     # Commands are attached to the pipeline's last classified domain so
     # that the process_command hook sees the same per-domain history as
     # the transcribed phrases.
@@ -439,9 +463,33 @@ async def process_request(
     page or WebSocket handshake - must carry the access token (query
     parameter `token` or `Authorization: Bearer` header). The server
     only listens on TLS, so plaintext access is impossible by design.
+    
+    IPs in ALLOWED_IPS_NO_TOKEN list are allowed to connect without a token.
     """
     is_websocket = request.headers.get("Upgrade", "").lower() == "websocket"
-    if not _token_ok(request):
+    
+    # Get client IP for logging
+    remote_address = connection.remote_address
+    if remote_address:
+        if isinstance(remote_address, tuple):
+            client_ip = remote_address[0]
+        else:
+            client_ip = remote_address
+    else:
+        client_ip = "unknown"
+    
+    # Log the IP for every request
+    request_type = "websocket" if is_websocket else "https"
+    log.info("Request from IP: %s (%s %s)", client_ip, request_type, request.path.split("?", 1)[0])
+    
+    # Check if the connection is from an allowed IP without token requirement
+    if client_ip in ALLOWED_IPS_NO_TOKEN:
+        # Skip token validation for this IP
+        token_ok = True
+    else:
+        token_ok = _token_ok(request)
+    
+    if not token_ok:
         log.warning(
             "unauthorized %s request for %s from %s",
             "websocket" if is_websocket else "https",

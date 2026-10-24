@@ -1,3 +1,4 @@
+cls
 @echo off
 REM Start the phone-stream server (generates certificates on first run).
 REM Usage: run.bat [port]   (default port: 8443)
@@ -16,5 +17,7 @@ if errorlevel 1 exit /b 1
 set PORT=%1
 if "%PORT%"=="" set PORT=8443
 
+@REM export PHONE_STREAM_AI_MODEL="autre-modèle"
+@REM export MISTRAL_CLASSIFICATION_MODEL="autre-modèle"
 python server.py %PORT%
 endlocal

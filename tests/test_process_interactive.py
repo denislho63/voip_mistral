@@ -13,7 +13,7 @@ sys.path.insert(0, ".")
 
 import speech_pipeline
 from client_history import ClientHistory
-from process_interactive import process_interactive
+from process.process_interactive import process_interactive
 
 
 class TestDefaultHook:

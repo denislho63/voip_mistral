@@ -38,7 +38,8 @@ from pathlib import Path
 
 log = logging.getLogger("phone-stream.interactive")
 
-ROOT = Path(__file__).resolve().parent
+# Go up one level from process/ to get to the project root
+ROOT = Path(__file__).resolve().parent.parent
 COMMANDS_FILE = ROOT / "static" / "commands.json"
 
 DEFAULT_REPLY = "Fait"
