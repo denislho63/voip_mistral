@@ -1,0 +1,16 @@
+{
+  "domains": {
+    "informatique": {
+      "url": "https://api.example.com/process/informatique",
+      "token": "your-token-here"
+    },
+    "pastoral": {
+      "url": "https://api.example.com/process/pastoral",
+      "token": "your-token-here"
+    },
+    "theologique": {
+      "url": "https://api.example.com/process/theologique",
+      "token": "your-token-here"
+    }
+  }
+}
