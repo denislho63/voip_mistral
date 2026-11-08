@@ -30,9 +30,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        # requirements.txt installs mistralai, but MISTRAL_API_KEY is
-        # deliberately NOT set: the server must run in degraded mode.
-        run: pip install -r requirements.txt pytest pytest-asyncio
+        # requirements-dev.txt installs mistralai + pytest + pytest-asyncio,
+        # but MISTRAL_API_KEY is deliberately NOT set: the server must run
+        # in degraded mode. pytest-asyncio is required by pytest.ini
+        # (asyncio_mode = auto) for the async tests to run.
+        run: pip install -r requirements-dev.txt
       - name: Generate self-signed certificate
         run: |
           mkdir -p certs

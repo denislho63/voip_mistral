@@ -10,12 +10,12 @@ Each service should:
 
 Example usage:
     from remotes.remote_generic import RemoteService
-    
+
     class MyService(RemoteService):
         def process(self, data: dict) -> dict:
             # Your processing logic here
             return {"response": "Hello!"}
-    
+
     if __name__ == "__main__":
         MyService.run(host="0.0.0.0", port=8000)
 """

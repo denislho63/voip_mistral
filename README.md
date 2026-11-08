@@ -176,9 +176,13 @@ sent as text and converted to speech. Default: echoes the received text
 
 - **Lint / format**: `ruff check .` and `ruff format --check .` (config in
   `pyproject.toml`; run `pip install ruff`).
-- **Tests**: `pip install -r requirements.txt pytest pytest-asyncio`, then
+- **Tests**: `pip install -r requirements-dev.txt`, then
   `pytest tests/` (generate certs with `bash gen_certs.sh` first; set
-  `PHONE_STREAM_TOKEN=whatever` to pin the token).
+  `PHONE_STREAM_TOKEN=whatever` to pin the token). `requirements-dev.txt`
+  adds `pytest` + `pytest-asyncio` on top of `requirements.txt`;
+  `pytest-asyncio` is required by `pytest.ini` (`asyncio_mode = auto`) —
+  without it the async tests fail with "async def functions are not
+  natively supported".
 - **CI**: GitHub Actions (`.github/workflows/ci.yml`) — lint + tests on
   Python 3.10 and 3.12, server booted in degraded mode (no API key).
 

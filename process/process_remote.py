@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,14 +34,14 @@ def _load_config() -> dict:
     global _config
     if _config is not None:
         return _config
-    
+
     if not CONFIG_PATH.is_file():
         log.warning("Remote config file not found: %s", CONFIG_PATH)
         _config = {"domains": {}}
         return _config
-    
+
     try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             _config = json.load(f)
         log.info("Remote configuration loaded from %s", CONFIG_PATH)
         return _config
@@ -66,37 +65,37 @@ def process_remote(
     history: list[dict] | None = None,
 ) -> str:
     """Process a phrase by calling a remote web service.
-    
+
     This function sends all parameters as JSON to the configured endpoint
     for the domain and returns the response text.
-    
+
     Args:
         realtime_text: The realtime transcription
         batch_text: The batch transcription (with vocabulary bias)
         client_id: Client identifier
         domain: The detected domain
         history: Conversation history for context
-    
+
     Returns:
         The response text from the remote service, or empty string on error.
     """
     if not domain:
         log.debug("No domain specified for remote processing")
         return ""
-    
+
     # Get configuration for this domain
     domain_config = _get_domain_config(domain)
     if domain_config is None:
         log.debug("No remote configuration for domain '%s'", domain)
         return ""
-    
+
     url = domain_config.get("url")
     token = domain_config.get("token")
-    
+
     if not url:
         log.warning("No URL configured for domain '%s'", domain)
         return ""
-    
+
     # Build the request payload with all parameters
     payload = {
         "realtime_text": realtime_text,
@@ -105,35 +104,35 @@ def process_remote(
         "domain": domain,
         "history": history or [],
     }
-    
+
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    
+
     # Add authorization header if token is configured
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    
+
     try:
         # Use httpx for synchronous HTTP requests (compatible with async code via threading)
         timeout = httpx.Timeout(10.0, connect=5.0)
-        
+
         log.debug("Calling remote service for domain '%s' at %s", domain, url)
-        
+
         response = httpx.post(
             url,
             json=payload,
             headers=headers,
             timeout=timeout,
         )
-        
+
         # Check for successful response
         response.raise_for_status()
-        
+
         # Parse response JSON
         response_data = response.json()
-        
+
         # Extract the response text - handle different response formats
         if isinstance(response_data, dict):
             # Try common field names
@@ -146,17 +145,25 @@ def process_remote(
             return response_data
         else:
             return str(response_data)
-            
+
     except httpx.HTTPStatusError as exc:
-        log.error("Remote service returned error for domain '%s': %s %s", 
-                  domain, exc.response.status_code, exc.response.text[:200])
+        log.error(
+            "Remote service returned error for domain '%s': %s %s",
+            domain,
+            exc.response.status_code,
+            exc.response.text[:200],
+        )
         return ""
     except httpx.RequestError as exc:
         log.error("Failed to call remote service for domain '%s': %s", domain, exc)
         return ""
     except (json.JSONDecodeError, ValueError) as exc:
-        log.error("Invalid response from remote service for domain '%s': %s", domain, exc)
+        log.error(
+            "Invalid response from remote service for domain '%s': %s", domain, exc
+        )
         return ""
     except Exception as exc:
-        log.error("Unexpected error calling remote service for domain '%s': %s", domain, exc)
+        log.error(
+            "Unexpected error calling remote service for domain '%s': %s", domain, exc
+        )
         return ""

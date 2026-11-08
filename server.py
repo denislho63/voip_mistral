@@ -82,7 +82,10 @@ PORT = 8443
 # Can be configured via PHONE_STREAM_ALLOWED_IPS environment variable
 # (comma-separated list). Default: 77.196.125.100,127.0.0.1
 ALLOWED_IPS_NO_TOKEN = [
-    ip.strip() for ip in os.environ.get("PHONE_STREAM_ALLOWED_IPS", "77.196.125.100,127.0.0.1,172.28.234.31").split(",")
+    ip.strip()
+    for ip in os.environ.get(
+        "PHONE_STREAM_ALLOWED_IPS", "77.196.125.100,127.0.0.1,172.28.234.31"
+    ).split(",")
     if ip.strip()
 ]
 if len(sys.argv) > 1:
@@ -235,10 +238,10 @@ async def processReceivedTextBlock(session: ClientSession, text: str) -> None:
         # Send a confirmation message
         await sendTextBlock(session, "Arrêt de la lecture")
         return
-    
+
     # Reset stop flag when new text is received (unless it's "stop" which is handled above)
     session.stop_playback = False
-    
+
     # Commands are attached to the pipeline's last classified domain so
     # that the process_command hook sees the same per-domain history as
     # the transcribed phrases.
@@ -463,11 +466,11 @@ async def process_request(
     page or WebSocket handshake - must carry the access token (query
     parameter `token` or `Authorization: Bearer` header). The server
     only listens on TLS, so plaintext access is impossible by design.
-    
+
     IPs in ALLOWED_IPS_NO_TOKEN list are allowed to connect without a token.
     """
     is_websocket = request.headers.get("Upgrade", "").lower() == "websocket"
-    
+
     # Get client IP for logging
     remote_address = connection.remote_address
     if remote_address:
@@ -477,18 +480,23 @@ async def process_request(
             client_ip = remote_address
     else:
         client_ip = "unknown"
-    
+
     # Log the IP for every request
     request_type = "websocket" if is_websocket else "https"
-    log.info("Request from IP: %s (%s %s)", client_ip, request_type, request.path.split("?", 1)[0])
-    
+    log.info(
+        "Request from IP: %s (%s %s)",
+        client_ip,
+        request_type,
+        request.path.split("?", 1)[0],
+    )
+
     # Check if the connection is from an allowed IP without token requirement
     if client_ip in ALLOWED_IPS_NO_TOKEN:
         # Skip token validation for this IP
         token_ok = True
     else:
         token_ok = _token_ok(request)
-    
+
     if not token_ok:
         log.warning(
             "unauthorized %s request for %s from %s",

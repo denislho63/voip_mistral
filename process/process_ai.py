@@ -64,6 +64,7 @@ def _get_client():
         return None
     try:
         from mistralai.client import Mistral
+
         return Mistral(api_key=api_key)
     except ImportError:
         return None
@@ -76,7 +77,7 @@ def _build_messages(
     history: list[dict] | None,
 ) -> list[dict]:
     """Build the conversation context for the LLM.
-    
+
     Includes:
     - System prompt for voice-optimized responses
     - Domain context
@@ -84,18 +85,20 @@ def _build_messages(
     - The current phrase to respond to
     """
     messages = []
-    
+
     # System message
     messages.append({"role": "system", "content": _SYSTEM_PROMPT})
-    
+
     # Domain context (helps the model adapt its style)
     if domain:
-        messages.append({
-            "role": "system",
-            "content": f"Domaine de la conversation : {domain}. "
-                       "Adapte ton vocabulaire et ton style à ce domaine."
-        })
-    
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Domaine de la conversation : {domain}. "
+                "Adapte ton vocabulaire et ton style à ce domaine.",
+            }
+        )
+
     # History context (previous exchanges in this domain)
     if history:
         history_texts = []
@@ -107,23 +110,23 @@ def _build_messages(
                     history_texts.append(f"Utilisateur: {text}")
                 elif role in ("response", "command"):
                     history_texts.append(f"Assistant: {text}")
-        
+
         if history_texts:
-            messages.append({
-                "role": "system",
-                "content": "Contexte de la conversation : " + " | ".join(history_texts[-5:])
-            })
-    
+            messages.append(
+                {
+                    "role": "system",
+                    "content": "Contexte de la conversation : "
+                    + " | ".join(history_texts[-5:]),
+                }
+            )
+
     # User message - use batch_text if available, else realtime_text
     user_text = batch_text or realtime_text
     if not user_text:
         return []
-    
-    messages.append({
-        "role": "user",
-        "content": user_text
-    })
-    
+
+    messages.append({"role": "user", "content": user_text})
+
     return messages
 
 
@@ -135,21 +138,21 @@ def process_ai(
     history: list[dict] | None = None,
 ) -> str:
     """Process a phrase using Mistral LLM to generate a voice-optimized response.
-    
+
     This is designed to be called from processText() as a fallback when no
     other processing has occurred. It returns a concise, voice-friendly response.
-    
+
     Args:
         realtime_text: The realtime transcription of the phrase
         batch_text: The batch transcription (with vocabulary bias)
         client_id: Identifier for the connected client
         domain: The detected domain for vocabulary context
         history: Previous exchanges in this domain for context
-    
+
     Returns:
         The AI-generated response text, optimized for voice reading.
         Returns an empty string if the AI call fails or is unavailable.
-    
+
     Features:
         - Concise, direct responses
         - Numbered lists for easy voice navigation
@@ -160,15 +163,19 @@ def process_ai(
     if client is None:
         log.debug("Mistral client not available for process_ai")
         return ""
-    
+
     # Log that history was received for debugging
     if history:
-        log.debug("process_ai received history with %d records for domain '%s'", len(history), domain)
-    
+        log.debug(
+            "process_ai received history with %d records for domain '%s'",
+            len(history),
+            domain,
+        )
+
     messages = _build_messages(realtime_text, batch_text, domain, history)
     if not messages:
         return ""
-    
+
     try:
         response = client.chat.complete(
             model=AI_MODEL,
@@ -184,17 +191,21 @@ def process_ai(
             if content:
                 # Clean up the response
                 result = content.strip()
-                
+
                 # Ensure we end with a sentence-ending punctuation for TTS
-                if result and result[-1] not in ('.', '!', '?', ';', ':'):
-                    result += '.'
-                
-                log.info("AI response for '%s': %s", (batch_text or realtime_text)[:50], result[:100])
+                if result and result[-1] not in (".", "!", "?", ";", ":"):
+                    result += "."
+
+                log.info(
+                    "AI response for '%s': %s",
+                    (batch_text or realtime_text)[:50],
+                    result[:100],
+                )
                 return result
             else:
                 log.warning("AI returned empty content")
 
     except Exception as exc:
         log.warning("AI processing failed: %s", exc)
-    
+
     return ""

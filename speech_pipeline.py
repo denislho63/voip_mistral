@@ -280,11 +280,13 @@ class SpeechPipeline:
                             log.info("realtime transcription session created")
                         elif isinstance(event, TranscriptionStreamTextDelta):
                             # Ensure event.text is a string before processing
-                            text = getattr(event, 'text', None)
+                            text = getattr(event, "text", None)
                             if isinstance(text, str):
                                 await self._handle_delta(text)
                             else:
-                                log.debug("received non-string text delta: %s", type(event))
+                                log.debug(
+                                    "received non-string text delta: %s", type(event)
+                                )
                         elif isinstance(event, TranscriptionStreamDone):
                             log.info("realtime transcription done")
                             # Flush any pending partial phrase (fall back to the
@@ -292,7 +294,9 @@ class SpeechPipeline:
                             done_text = getattr(event, "text", None)
                             await self._flush_pending_phrase(
                                 "transcription.done",
-                                fallback_text=done_text if isinstance(done_text, str) else "",
+                                fallback_text=done_text
+                                if isinstance(done_text, str)
+                                else "",
                             )
                         elif isinstance(event, RealtimeTranscriptionError):
                             log.error("realtime transcription error: %s", event)
@@ -301,11 +305,15 @@ class SpeechPipeline:
                             # UnknownRealtimeEvent fallback: an error payload that
                             # failed schema validation still ends the stream
                             if getattr(event, "type", None) == "error":
-                                log.error("realtime transcription error (raw): %s", event)
+                                log.error(
+                                    "realtime transcription error (raw): %s", event
+                                )
                                 await self._flush_pending_phrase("error event")
                             else:
                                 # Ignore unknown event types (e.g., raw lists or other objects)
-                                log.debug("received unknown event type: %s", type(event))
+                                log.debug(
+                                    "received unknown event type: %s", type(event)
+                                )
                     # The stream ended (done, error, or closed): never lose received text
                     await self._flush_pending_phrase("stream end")
                 except asyncio.CancelledError:
@@ -319,7 +327,8 @@ class SpeechPipeline:
                     # The session worked at least briefly: reset the backoff
                     backoff = RECONNECT_DELAY_MIN
                 log.warning(
-                    "realtime transcription stream ended; reconnecting in %.1fs", backoff
+                    "realtime transcription stream ended; reconnecting in %.1fs",
+                    backoff,
                 )
                 try:
                     # Interruptible sleep: stop() wakes us immediately
@@ -382,7 +391,11 @@ class SpeechPipeline:
 
         # Clear history when domain changes
         if domain != self.last_domain and self.history is not None:
-            log.info("Domain changed from '%s' to '%s', clearing domain history", self.last_domain, domain)
+            log.info(
+                "Domain changed from '%s' to '%s', clearing domain history",
+                self.last_domain,
+                domain,
+            )
             # Clear history for the new domain (start fresh)
             if domain in self.history._by_domain:
                 self.history._by_domain[domain].clear()
@@ -402,9 +415,7 @@ class SpeechPipeline:
         )
         if interactive_text:
             self._record_response(domain, interactive_text)
-            log.info(
-                "process_interactive output (batch skipped): %s", interactive_text
-            )
+            log.info("process_interactive output (batch skipped): %s", interactive_text)
             await self.on_text(interactive_text, "interactive")
             pcm = await self.synthesize(interactive_text)
             if pcm:
@@ -485,11 +496,13 @@ class SpeechPipeline:
                     language=LANGUAGE,
                     **kwargs,
                 )
-                text = getattr(response, 'text', None)
+                text = getattr(response, "text", None)
                 if isinstance(text, str):
                     return text.strip()
                 else:
-                    log.warning("batch transcription returned non-string text: %s", type(text))
+                    log.warning(
+                        "batch transcription returned non-string text: %s", type(text)
+                    )
                     return ""
 
             return await asyncio.to_thread(call)

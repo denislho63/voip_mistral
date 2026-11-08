@@ -78,18 +78,18 @@ def process_domain(
     history: list[dict] | None = None,
 ) -> str:
     """Process a phrase using domain-specific logic.
-    
+
     This function dispatches to domain-specific processors if available.
     If no processor exists for the domain or the processor returns an empty
     string, the caller should fall back to process_ai().
-    
+
     Args:
         realtime_text: The realtime transcription
         batch_text: The batch transcription (with vocabulary bias)
         client_id: Client identifier
         domain: The detected domain
         history: Conversation history for context
-    
+
     Returns:
         The domain-specific response text, or empty string if no custom
         processing is available for this domain.
@@ -97,14 +97,14 @@ def process_domain(
     if not domain:
         log.debug("No domain specified, skipping domain processing")
         return ""
-    
+
     # Look up the processor for this domain
     processor = _DOMAIN_PROCESSORS.get(domain)
-    
+
     if processor is None:
         log.debug("No custom processor for domain '%s'", domain)
         return ""
-    
+
     # Call the domain-specific processor
     try:
         result = processor(
@@ -114,14 +114,14 @@ def process_domain(
             domain=domain,
             history=history,
         )
-        
+
         if result:
             log.info("Domain processor '%s' returned: %s", domain, result[:80])
         else:
             log.debug("Domain processor '%s' returned empty", domain)
-        
+
         return result
-        
+
     except Exception as exc:
         log.warning("Domain processor '%s' failed: %s", domain, exc)
         return ""

@@ -55,13 +55,14 @@ def processText(
     """
     # Use the batch transcription as the base text
     text = batch_text or realtime_text
-    
+
     if not text:
         return ""
-    
+
     # 1. Try domain-specific processing
     try:
         from .process_domain import process_domain
+
         domain_response = process_domain(
             realtime_text=realtime_text,
             batch_text=batch_text,
@@ -74,11 +75,12 @@ def processText(
     except Exception:
         # If domain processing fails, continue to AI fallback
         pass
-    
+
     # 2. Try AI processing (if enabled)
     if USE_AI:
         try:
             from .process_ai import process_ai
+
             ai_response = process_ai(
                 realtime_text=realtime_text,
                 batch_text=batch_text,
@@ -91,6 +93,6 @@ def processText(
         except Exception:
             # If AI processing fails, continue to fallback
             pass
-    
+
     # 3. Fallback: return the transcription
     return text

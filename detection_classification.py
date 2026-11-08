@@ -33,15 +33,13 @@ from mistral_content import message_text
 # Configure logging with custom format
 logging.basicConfig(
     level=logging.INFO,  # Set the logging level to DEBUG
-    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s'  # Custom format
+    format="%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s",  # Custom format
 )
 log = logging.getLogger("phone-stream.classification")
 
 ROOT = Path(__file__).resolve().parent
 
-CLASSIFICATION_MODEL = os.environ.get(
-    "MISTRAL_CLASSIFICATION_MODEL", "mistral-large-4"
-)
+CLASSIFICATION_MODEL = os.environ.get("MISTRAL_CLASSIFICATION_MODEL", "mistral-large-4")
 
 DEFAULT_DOMAIN = "general"
 
@@ -93,7 +91,7 @@ def _strip_accents(text: str) -> str:
 
 def _read_vocabulary_file(path: Path) -> list[str]:
     """Lit un fichier de vocabulaire et retourne la liste des termes.
-    
+
     Filtre les termes invalides pour l'API Mistral context_bias:
     - Les termes ne doivent pas contenir de virgules
     - Les termes ne doivent pas contenir d'espaces
@@ -108,7 +106,10 @@ def _read_vocabulary_file(path: Path) -> list[str]:
             if "," not in term and " " not in term:
                 terms.append(term)
             else:
-                log.warning("Skipping invalid vocabulary term '%s' (contains comma or whitespace)", term)
+                log.warning(
+                    "Skipping invalid vocabulary term '%s' (contains comma or whitespace)",
+                    term,
+                )
     return terms
 
 
@@ -121,42 +122,48 @@ def _slug(domain: str) -> str:
 
 def _load_all_vocabularies() -> None:
     """Charge tous les vocabulaires disponibles en mémoire au démarrage.
-    
+
     Parcourt le dossier vocabularies/ et charge chaque fichier .txt.
     Pour chaque fichier, essaye de trouver le domaine correspondant (par nom
     de fichier ou slug) et le stocke dans _VOCABULARY_CACHE.
     """
     if not VOCABULARY_DIR.is_dir():
-        log.debug("vocabulary directory %s does not exist, skipping preload", VOCABULARY_DIR)
+        log.debug(
+            "vocabulary directory %s does not exist, skipping preload", VOCABULARY_DIR
+        )
         return
-    
+
     loaded_count = 0
     for vocab_file in VOCABULARY_DIR.glob("*.txt"):
         terms = _read_vocabulary_file(vocab_file)
         if not terms:
             continue
-        
+
         # Essayer de trouver le domaine correspondant à ce fichier
         # 1. Nom du fichier sans .txt
         stem = vocab_file.stem
-        
+
         # 2. Trouver quel domaine correspond à ce stem
         domain_found = None
         for domain in DOMAINS:
             if stem == domain or stem == _slug(domain):
                 domain_found = domain
                 break
-        
+
         # 3. Si aucun domaine trouvé, utiliser le stem comme clé
         if domain_found is None:
             domain_found = stem
-        
+
         # Stocker dans le cache
         if domain_found not in _VOCABULARY_CACHE:
             _VOCABULARY_CACHE[domain_found] = terms
             loaded_count += 1
-            log.info("preloaded vocabulary for domain %s (%d terms)", domain_found, len(terms))
-    
+            log.info(
+                "preloaded vocabulary for domain %s (%d terms)",
+                domain_found,
+                len(terms),
+            )
+
     if loaded_count == 0:
         log.debug("no vocabulary files found in %s", VOCABULARY_DIR)
 
@@ -290,7 +297,7 @@ def vocabulary_for_domain(domain: str) -> list[str]:
     # 1. Vérifier le cache d'abord
     if domain in _VOCABULARY_CACHE:
         return _VOCABULARY_CACHE[domain]
-    
+
     # 2. Essayer de charger à la demande (fallback pour les vocabulaires ajoutés à chaud)
     terms = []
     for candidate in (
@@ -301,16 +308,18 @@ def vocabulary_for_domain(domain: str) -> list[str]:
         if terms:
             # Mettre en cache pour les appels futurs
             _VOCABULARY_CACHE[domain] = terms
-            log.info("lazy-loaded vocabulary for domain %s (%d terms)", domain, len(terms))
+            log.info(
+                "lazy-loaded vocabulary for domain %s (%d terms)", domain, len(terms)
+            )
             return terms
-    
+
     # 3. Aucun vocabulaire trouvé
     return []
 
 
 def reload_vocabularies() -> None:
     """Recharge tous les vocabulaires depuis le disque.
-    
+
     Utile si des fichiers ont été modifiés ou ajoutés pendant l'exécution.
     Efface le cache actuel et recharge tout.
     """

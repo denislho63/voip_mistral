@@ -17,11 +17,11 @@ Example:
     class MyService(RemoteService):
         ALLOWED_IPS = ["127.0.0.1", "192.168.1.100"]
         TOKEN = "my-secret-token"
-        
+
         def process(self, data: dict) -> dict:
             text = data.get("realtime_text", "")
             return {"response": f"You said: {text}"}
-    
+
     if __name__ == "__main__":
         MyService.run()
 """
@@ -30,15 +30,15 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from typing import Any
+from typing import ClassVar
 
 # Try to import FastAPI and uvicorn
 try:
-    from fastapi import FastAPI, HTTPException, Request, status
-    from fastapi.responses import JSONResponse
-    from fastapi.middleware.cors import CORSMiddleware
     import uvicorn
+    from fastapi import FastAPI, HTTPException, Request, status
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+
     FASTAPI_AVAILABLE = True
 except ImportError:
     FASTAPI_AVAILABLE = False
@@ -53,16 +53,16 @@ log = logging.getLogger("phone-stream.remote")
 
 class RemoteService:
     """Base class for remote services.
-    
+
     Provides authentication (token or IP-based) and JSON request/response handling.
     Subclasses should implement the process() method to handle domain-specific logic.
-    
+
     Configuration:
     - Set ALLOWED_IPS class variable to a list of allowed IP addresses
     - Set TOKEN class variable to the expected authorization token
     - If both are set, token takes precedence over IP
     - If neither is set, all requests are accepted (not recommended for production)
-    
+
     Request format (JSON):
     {
         "realtime_text": "...",
@@ -71,27 +71,27 @@ class RemoteService:
         "domain": "...",
         "history": [...]
     }
-    
+
     Response format (JSON):
     {
         "response": "...",
         "text": "...",  // alternative field names also supported
         ...
     }
-    
+
     Dependencies:
     - Requires FastAPI and uvicorn for HTTP server functionality
     - Install with: pip install fastapi uvicorn[standard]
     """
-    
+
     # Authentication configuration - override in subclasses
-    ALLOWED_IPS: list[str] = []
+    ALLOWED_IPS: ClassVar[list[str]] = []
     TOKEN: str = ""
-    
+
     # Server configuration
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    
+
     def __init__(self):
         """Initialize the service."""
         if not FASTAPI_AVAILABLE:
@@ -99,9 +99,9 @@ class RemoteService:
                 "FastAPI and uvicorn are required for remote services. "
                 "Install them with: pip install fastapi uvicorn[standard]"
             )
-        
+
         self.app = FastAPI(title=self.__class__.__name__)
-        
+
         # Add CORS middleware for development
         self.app.add_middleware(
             CORSMiddleware,
@@ -110,24 +110,25 @@ class RemoteService:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-        
+
         # Setup logging
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         )
-        
+
         # Register routes
         self._setup_routes()
-    
+
     def _setup_routes(self):
         """Setup FastAPI routes."""
+
         @self.app.post("/")
         @self.app.post("/process")
         async def handle_request(request: Request):
             """Handle incoming POST requests."""
             return await self._handle_request(request)
-        
+
         # Health check endpoint
         @self.app.get("/health")
         async def health_check():
@@ -136,12 +137,12 @@ class RemoteService:
                 content={"status": "ok", "service": self.__class__.__name__},
                 status_code=status.HTTP_200_OK,
             )
-    
+
     async def _handle_request(self, request: Request) -> JSONResponse:
         """Handle an incoming request with authentication."""
         # Check client IP
         client_ip = self._get_client_ip(request)
-        
+
         # Verify authentication
         if not self._verify_auth(request, client_ip):
             log.warning("Unauthorized request from IP: %s", client_ip)
@@ -149,18 +150,22 @@ class RemoteService:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Unauthorized",
             )
-        
+
         # Parse JSON payload
         try:
             data = await request.json()
-            log.debug("Received data from %s: %s", client_ip, json.dumps(data, ensure_ascii=False)[:200])
+            log.debug(
+                "Received data from %s: %s",
+                client_ip,
+                json.dumps(data, ensure_ascii=False)[:200],
+            )
         except json.JSONDecodeError as exc:
             log.error("Invalid JSON from %s: %s", client_ip, exc)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON",
-            )
-        
+            ) from exc
+
         # Process the request
         try:
             result = self.process(data)
@@ -171,8 +176,8 @@ class RemoteService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(exc),
-            )
-    
+            ) from exc
+
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP address from request."""
         # Try various headers that might contain the real client IP
@@ -180,43 +185,45 @@ class RemoteService:
         if forwarded:
             # X-Forwarded-For can contain multiple IPs, take the first
             return forwarded.split(",")[0].strip()
-        
+
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
             return real_ip
-        
+
         # Fall back to client host
         client = request.client
         if client:
             return client.host
-        
+
         return "unknown"
-    
+
     def _verify_auth(self, request: Request, client_ip: str) -> bool:
         """Verify authentication via token or IP whitelist."""
         # Check token first (Bearer authentication)
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            token = auth_header[len("Bearer "):].strip()
+            token = auth_header[len("Bearer ") :].strip()
             if self.TOKEN and token == self.TOKEN:
                 return True
-        
+
         # Check IP whitelist
         if client_ip in self.ALLOWED_IPS:
             return True
-        
+
         # If no token configured and no IPs whitelisted, accept all (dev mode)
         if not self.TOKEN and not self.ALLOWED_IPS:
-            log.warning("No authentication configured - accepting all requests (dev mode)")
+            log.warning(
+                "No authentication configured - accepting all requests (dev mode)"
+            )
             return True
-        
+
         return False
-    
+
     def process(self, data: dict) -> dict:
         """Process the incoming data and return a response.
-        
+
         Subclasses MUST override this method to implement service-specific logic.
-        
+
         Args:
             data: Dictionary containing request parameters:
                 - realtime_text: str
@@ -224,7 +231,7 @@ class RemoteService:
                 - client_id: str
                 - domain: str
                 - history: list[dict]
-        
+
         Returns:
             Dictionary with response. Common field names:
                 - response: str (primary)
@@ -234,11 +241,11 @@ class RemoteService:
                 - output: str
         """
         raise NotImplementedError("Subclasses must implement process() method")
-    
+
     @classmethod
     def run(cls, host: str | None = None, port: int | None = None):
         """Run the service as a standalone HTTP server.
-        
+
         Args:
             host: Server host (default: HOST class variable)
             port: Server port (default: PORT class variable)
@@ -246,7 +253,7 @@ class RemoteService:
         service = cls()
         run_host = host or cls.HOST
         run_port = port or cls.PORT
-        
+
         log.info("Starting %s on %s:%d", cls.__name__, run_host, run_port)
         uvicorn.run(
             service.app,
