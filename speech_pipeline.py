@@ -63,6 +63,18 @@ TTS_VOICE = os.environ.get("MISTRAL_TTS_VOICE", "5a271406-039d-46fe-835b-fbbb00e
 SAMPLE_RATE = 16000
 LANGUAGE = "fr"
 
+# Reconnection policy for the realtime transcription stream: when the
+# upstream session drops (timeout, network error, API error event), a new
+# session is opened automatically with exponential backoff between attempts.
+RECONNECT_DELAY_MIN = float(os.environ.get("PHONE_STREAM_RECONNECT_DELAY_MIN", "1"))
+RECONNECT_DELAY_MAX = float(os.environ.get("PHONE_STREAM_RECONNECT_DELAY_MAX", "30"))
+# Grace period for the background task to finish on stop() before cancelling.
+STOP_TIMEOUT = float(os.environ.get("PHONE_STREAM_STOP_TIMEOUT", "5"))
+# A pending phrase is processed after this much silence (no new text delta),
+# even without ending punctuation or a stream timeout.
+SILENCE_DELAY = float(os.environ.get("PHONE_STREAM_SILENCE_DELAY", "1.0"))
+SILENCE_POLL = 0.2
+
 
 # Vocabulary override for the batch (second) transcription pass:
 # PHONE_STREAM_VOCABULARY=term1,term2 (inline list) or
@@ -199,6 +211,9 @@ class SpeechPipeline:
         self.audio = io.BytesIO()
         self.phrase = ""
         self.last_domain = ""
+        self._stopping = False
+        self._stop_event = asyncio.Event()
+        self._last_delta_at = 0.0
         self.task: asyncio.Task | None = asyncio.create_task(self._run())
 
     async def feed(self, pcm: bytes) -> None:
@@ -211,11 +226,23 @@ class SpeechPipeline:
         return await asyncio.to_thread(tts_pcm, self.client, text)
 
     async def stop(self) -> None:
-        """End the session and wait for the background task to finish."""
+        """End the session and wait for the background task to finish.
+
+        Signals the reconnect loop to exit, feeds the stream terminator, and
+        waits up to STOP_TIMEOUT seconds before cancelling a stuck task.
+        """
+        self._stopping = True
+        self._stop_event.set()
         await self.queue.put(None)
         if self.task:
             try:
-                await self.task
+                await asyncio.wait_for(asyncio.shield(self.task), timeout=STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                self.task.cancel()
+                try:
+                    await self.task
+                except (asyncio.CancelledError, Exception):
+                    pass
             except Exception:
                 pass
         self.task = None
@@ -228,102 +255,184 @@ class SpeechPipeline:
             yield chunk
 
     async def _run(self) -> None:
+        """Consume the realtime stream, reconnecting automatically on failure.
+
+        Each iteration opens one upstream session. When the session drops
+        (timeout, network error, API error event) the pending phrase is
+        flushed, then a new session is opened after a backoff delay — unless
+        stop() was requested. Audio fed during the outage stays queued and
+        is sent to the new session.
+        """
+        backoff = RECONNECT_DELAY_MIN
+        watchdog = asyncio.create_task(self._silence_watchdog())
         try:
-            async for event in self.client.audio.realtime.transcribe_stream(
-                audio_stream=self._stream(),
-                model=REALTIME_MODEL,
-                audio_format=self.audio_format,
-            ):
-                # Handle known event types
-                if isinstance(event, RealtimeTranscriptionSessionCreated):
-                    log.info("realtime transcription session created")
-                elif isinstance(event, TranscriptionStreamTextDelta):
-                    # Ensure event.text is a string before processing
-                    text = getattr(event, 'text', None)
-                    if isinstance(text, str):
-                        await self._handle_delta(text)
-                    else:
-                        log.debug("received non-string text delta: %s", type(event))
-                elif isinstance(event, TranscriptionStreamDone):
-                    log.info("realtime transcription done")
-                elif isinstance(event, RealtimeTranscriptionError):
-                    log.error("realtime transcription error: %s", event)
-                else:
-                    # Ignore unknown event types (e.g., raw lists or other objects)
-                    log.debug("received unknown event type: %s", type(event))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            log.error("realtime transcription stream failed: %s", exc)
+            while not self._stopping:
+                got_events = False
+                try:
+                    async for event in self.client.audio.realtime.transcribe_stream(
+                        audio_stream=self._stream(),
+                        model=REALTIME_MODEL,
+                        audio_format=self.audio_format,
+                    ):
+                        got_events = True
+                        # Handle known event types
+                        if isinstance(event, RealtimeTranscriptionSessionCreated):
+                            log.info("realtime transcription session created")
+                        elif isinstance(event, TranscriptionStreamTextDelta):
+                            # Ensure event.text is a string before processing
+                            text = getattr(event, 'text', None)
+                            if isinstance(text, str):
+                                await self._handle_delta(text)
+                            else:
+                                log.debug("received non-string text delta: %s", type(event))
+                        elif isinstance(event, TranscriptionStreamDone):
+                            log.info("realtime transcription done")
+                            # Flush any pending partial phrase (fall back to the
+                            # done event's full text when no delta was accumulated)
+                            done_text = getattr(event, "text", None)
+                            await self._flush_pending_phrase(
+                                "transcription.done",
+                                fallback_text=done_text if isinstance(done_text, str) else "",
+                            )
+                        elif isinstance(event, RealtimeTranscriptionError):
+                            log.error("realtime transcription error: %s", event)
+                            await self._flush_pending_phrase("error event")
+                        else:
+                            # UnknownRealtimeEvent fallback: an error payload that
+                            # failed schema validation still ends the stream
+                            if getattr(event, "type", None) == "error":
+                                log.error("realtime transcription error (raw): %s", event)
+                                await self._flush_pending_phrase("error event")
+                            else:
+                                # Ignore unknown event types (e.g., raw lists or other objects)
+                                log.debug("received unknown event type: %s", type(event))
+                    # The stream ended (done, error, or closed): never lose received text
+                    await self._flush_pending_phrase("stream end")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.error("realtime transcription stream failed: %s", exc)
+                    await self._flush_pending_phrase("stream failure")
+                if self._stopping:
+                    break
+                if got_events:
+                    # The session worked at least briefly: reset the backoff
+                    backoff = RECONNECT_DELAY_MIN
+                log.warning(
+                    "realtime transcription stream ended; reconnecting in %.1fs", backoff
+                )
+                try:
+                    # Interruptible sleep: stop() wakes us immediately
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(backoff * 2, RECONNECT_DELAY_MAX)
+        finally:
+            watchdog.cancel()
+            try:
+                await watchdog
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _silence_watchdog(self) -> None:
+        """Flush the pending phrase after SILENCE_DELAY seconds without a new
+        text delta, so a paused phrase is processed without waiting for
+        ending punctuation or a stream timeout."""
+        loop = asyncio.get_running_loop()
+        while True:
+            await asyncio.sleep(SILENCE_POLL)
+            if self._stopping:
+                return
+            if not self.phrase.strip():
+                continue
+            if loop.time() - self._last_delta_at >= SILENCE_DELAY:
+                await self._flush_pending_phrase("silence")
 
     async def _handle_delta(self, text: str) -> None:
+        self._last_delta_at = asyncio.get_running_loop().time()
         if text in (".", "!", "?"):
-            full_phrase = self.phrase + text
-            wav_data = self._wav_bytes()
-            self.audio = io.BytesIO()
-            self.phrase = ""
-            if not full_phrase.strip():
-                return
-            log.info("phrase (realtime pass): %s", full_phrase)
-            # Domain classification from the realtime text: pick the
-            # most fitting vocabulary before the batch (second) pass.
-            domain = await self._classify(full_phrase)
-            
-            # Clear history when domain changes
-            if domain != self.last_domain and self.history is not None:
-                log.info("Domain changed from '%s' to '%s', clearing domain history", self.last_domain, domain)
-                # Clear history for the new domain (start fresh)
-                if domain in self.history._by_domain:
-                    self.history._by_domain[domain].clear()
-            
-            self.last_domain = domain
-            # Record the phrase (realtime text) and get this client's
-            # per-domain history to hand to the hooks as context.
-            history_records = self._record_phrase(domain, full_phrase, "")
-            # Interactive hook: react directly from the realtime text.
-            # Non-empty output is delivered immediately and the batch
-            # pass is skipped; empty output continues the normal flow.
-            interactive_text = process_interactive(
-                full_phrase,
-                client_id=self.client_id,
-                domain=domain,
-                history=history_records,
-            )
-            if interactive_text:
-                self._record_response(domain, interactive_text)
-                log.info(
-                    "process_interactive output (batch skipped): %s", interactive_text
-                )
-                await self.on_text(interactive_text, "interactive")
-                pcm = await self.synthesize(interactive_text)
-                if pcm:
-                    await self.on_audio(pcm)
-                return
-            # Batch (second) pass with the domain vocabulary.
-            vocabulary = vocabulary_for_domain(domain)
-            batch_text = await self._transcribe_batch(wav_data, vocabulary)
-            if batch_text:
-                log.info("phrase (batch pass, domain=%s): %s", domain, batch_text)
-            # User hook: decide what to speak/display from both transcriptions
-            spoken_text = processText(
-                full_phrase,
-                batch_text,
-                client_id=self.client_id,
-                domain=domain,
-                history=history_records,
-            )
-            if not spoken_text:
-                return
-            self._record_response(domain, spoken_text)
-            log.info("processText output: %s", spoken_text)
-            await self.on_text(spoken_text, "transcription")
-
-            # Text-to-speech: convert the processText() output to audio
-            pcm = await self.synthesize(spoken_text)
-            if pcm:
-                await self.on_audio(pcm)
+            await self._process_phrase(self.phrase + text)
         else:
             self.phrase += str(text)
+
+    async def _flush_pending_phrase(self, reason: str, fallback_text: str = "") -> None:
+        """Deliver a partial phrase when the realtime stream ends or errors.
+
+        Without this, text received as deltas but not terminated by '.', '!'
+        or '?' (e.g. after an error such as code 3804) would be dropped and
+        never displayed. Falls back to the terminal event's full text when
+        no delta was accumulated.
+        """
+        pending = self.phrase.strip() or fallback_text.strip()
+        if not pending:
+            return
+        log.info("flushing pending phrase (%s): %s", reason, pending)
+        await self._process_phrase(self.phrase or fallback_text)
+
+    async def _process_phrase(self, full_phrase: str) -> None:
+        wav_data = self._wav_bytes()
+        self.audio = io.BytesIO()
+        self.phrase = ""
+        if not full_phrase.strip():
+            return
+        log.info("phrase (realtime pass): %s", full_phrase)
+        # Domain classification from the realtime text: pick the
+        # most fitting vocabulary before the batch (second) pass.
+        domain = await self._classify(full_phrase)
+
+        # Clear history when domain changes
+        if domain != self.last_domain and self.history is not None:
+            log.info("Domain changed from '%s' to '%s', clearing domain history", self.last_domain, domain)
+            # Clear history for the new domain (start fresh)
+            if domain in self.history._by_domain:
+                self.history._by_domain[domain].clear()
+
+        self.last_domain = domain
+        # Record the phrase (realtime text) and get this client's
+        # per-domain history to hand to the hooks as context.
+        history_records = self._record_phrase(domain, full_phrase, "")
+        # Interactive hook: react directly from the realtime text.
+        # Non-empty output is delivered immediately and the batch
+        # pass is skipped; empty output continues the normal flow.
+        interactive_text = process_interactive(
+            full_phrase,
+            client_id=self.client_id,
+            domain=domain,
+            history=history_records,
+        )
+        if interactive_text:
+            self._record_response(domain, interactive_text)
+            log.info(
+                "process_interactive output (batch skipped): %s", interactive_text
+            )
+            await self.on_text(interactive_text, "interactive")
+            pcm = await self.synthesize(interactive_text)
+            if pcm:
+                await self.on_audio(pcm)
+            return
+        # Batch (second) pass with the domain vocabulary.
+        vocabulary = vocabulary_for_domain(domain)
+        batch_text = await self._transcribe_batch(wav_data, vocabulary)
+        if batch_text:
+            log.info("phrase (batch pass, domain=%s): %s", domain, batch_text)
+        # User hook: decide what to speak/display from both transcriptions
+        spoken_text = processText(
+            full_phrase,
+            batch_text,
+            client_id=self.client_id,
+            domain=domain,
+            history=history_records,
+        )
+        if not spoken_text:
+            return
+        self._record_response(domain, spoken_text)
+        log.info("processText output: %s", spoken_text)
+        await self.on_text(spoken_text, "transcription")
+
+        # Text-to-speech: convert the processText() output to audio
+        pcm = await self.synthesize(spoken_text)
+        if pcm:
+            await self.on_audio(pcm)
 
     def _wav_bytes(self) -> bytes:
         """Wrap the raw PCM buffer of the current phrase into a WAV container."""

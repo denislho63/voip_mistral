@@ -46,6 +46,9 @@ def server():
     env = dict(os.environ)
     env["PHONE_STREAM_TOKEN"] = TOKEN
     env.pop("MISTRAL_API_KEY", None)
+    # Tests connect from 127.0.0.1: exclude it from the no-token allowlist
+    # (the server default trusts localhost) so the 401 checks are exercised.
+    env["PHONE_STREAM_ALLOWED_IPS"] = "77.196.125.100"
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "server.py"), str(port)],
         cwd=ROOT,

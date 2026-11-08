@@ -82,7 +82,7 @@ PORT = 8443
 # Can be configured via PHONE_STREAM_ALLOWED_IPS environment variable
 # (comma-separated list). Default: 77.196.125.100,127.0.0.1
 ALLOWED_IPS_NO_TOKEN = [
-    ip.strip() for ip in os.environ.get("PHONE_STREAM_ALLOWED_IPS", "77.196.125.100,127.0.0.1").split(",")
+    ip.strip() for ip in os.environ.get("PHONE_STREAM_ALLOWED_IPS", "77.196.125.100,127.0.0.1,172.28.234.31").split(",")
     if ip.strip()
 ]
 if len(sys.argv) > 1:
@@ -97,7 +97,7 @@ MAX_TEXT_LEN = 64 * 1024
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    format="%(asctime)s %(levelname)- %(filename)s:%(lineno)d - %(funcName)s() -7s %(name)s: %(message)s",
 )
 log = logging.getLogger("phone-stream")
 

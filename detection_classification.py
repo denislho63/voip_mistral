@@ -28,6 +28,13 @@ import re
 import unicodedata
 from pathlib import Path
 
+from mistral_content import message_text
+
+# Configure logging with custom format
+logging.basicConfig(
+    level=logging.INFO,  # Set the logging level to DEBUG
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s() - %(message)s'  # Custom format
+)
 log = logging.getLogger("phone-stream.classification")
 
 ROOT = Path(__file__).resolve().parent
@@ -194,10 +201,9 @@ def find_domain(phrase: str, client=None) -> str:
         return DEFAULT_DOMAIN
     try:
         response = _chat_complete(client, messages)
-        raw = response.choices[0].message.content
-        # Ensure raw is a string before processing
-        if not isinstance(raw, str):
-            log.warning("classification returned non-string content: %s", type(raw))
+        raw = message_text(response.choices[0].message)
+        if not isinstance(raw, str) or not raw:
+            log.warning("classification returned empty/non-string content")
             return DEFAULT_DOMAIN
     except Exception as exc:
         log.warning("domain classification failed (%s); using %s", exc, DEFAULT_DOMAIN)
@@ -245,7 +251,7 @@ def _chat_complete(client, messages):
             temperature=0.0,
             top_p=1.0,
             max_tokens=20,
-            reasoning_effort="none",
+            reasoning_effort="low",
         )
     return chat(
         model=CLASSIFICATION_MODEL,

@@ -18,6 +18,8 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from mistral_content import message_text
+
 if TYPE_CHECKING:
     pass
 
@@ -174,25 +176,23 @@ def process_ai(
             temperature=AI_TEMPERATURE,
             top_p=1.0 if AI_TEMPERATURE == 0 else 0.9,
             max_tokens=AI_MAX_TOKENS,
-            reasoning_effort="none",
+            reasoning_effort="medium",
         )
-        # Extract the response text
+        # Extract the response text (SDK >= 3 returns a list of chunks)
         if response and response.choices:
-            content = response.choices[0].message.content
+            content = message_text(response.choices[0].message)
             if content:
-                # Ensure content is a string before processing
-                if isinstance(content, str):
-                    # Clean up the response
-                    result = content.strip()
-                    
-                    # Ensure we end with a sentence-ending punctuation for TTS
-                    if result and result[-1] not in ('.', '!', '?', ';', ':'):
-                        result += '.'
-                    
-                    log.info("AI response for '%s': %s", (batch_text or realtime_text)[:50], result[:100])
-                    return result
-                else:
-                    log.warning("AI returned non-string content: %s", type(content))
+                # Clean up the response
+                result = content.strip()
+                
+                # Ensure we end with a sentence-ending punctuation for TTS
+                if result and result[-1] not in ('.', '!', '?', ';', ':'):
+                    result += '.'
+                
+                log.info("AI response for '%s': %s", (batch_text or realtime_text)[:50], result[:100])
+                return result
+            else:
+                log.warning("AI returned empty content")
 
     except Exception as exc:
         log.warning("AI processing failed: %s", exc)
